@@ -76,4 +76,18 @@ export interface OpenedPdf {
   password?: string;
 }
 
-export type AppScreen = "open" | "workspace";
+export type WizardStep = "upload" | "select" | "review";
+
+export interface ReviewRow {
+  id: string;
+  page: number;
+  cells: string[];
+}
+
+export interface CellCorrection {
+  page: number;
+  row: number;
+  column: string;
+  oldValue: string;
+  newValue: string;
+}

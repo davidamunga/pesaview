@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Document, pdfjs } from "react-pdf";
 import workerSrc from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { tempDir, join } from "@tauri-apps/api/path";
@@ -7,11 +8,22 @@ import { FileOpener } from "@/components/file-opener";
 import { PageSidebar } from "@/components/page-sidebar";
 import { PasswordPrompt } from "@/components/password-prompt";
 import { PdfPageView } from "@/components/pdf-page-view";
-import { PreviewDialog } from "@/components/preview-dialog";
-import { WorkspaceToolbar } from "@/components/workspace-toolbar";
+import { ReviewStep } from "@/components/review-step";
+import { SelectToolbar } from "@/components/select-toolbar";
+import { WizardHeader } from "@/components/wizard-header";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { applyTemplateArea } from "@/lib/coordinates";
 import { matchTemplate } from "@/lib/matchTemplate";
-import { createId } from "@/lib/utils";
+import { pickPdf } from "@/lib/pickPdf";
+import { cn, createId, isTauri } from "@/lib/utils";
 import { TabulaService } from "@/services/tabulaService";
 import {
   allTemplates,
@@ -20,19 +32,19 @@ import {
   templateFromSelections,
 } from "@/services/templates";
 import type {
-  AppScreen,
   ExtractionMethod,
-  ExtractedTable,
   OpenedPdf,
   PageMetrics,
   Selection,
   StatementTemplate,
+  TableArea,
+  WizardStep,
 } from "@/types";
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerSrc;
 
 export default function App() {
-  const [screen, setScreen] = useState<AppScreen>("open");
+  const [step, setStep] = useState<WizardStep>("upload");
   const [pdf, setPdf] = useState<OpenedPdf | null>(null);
   const [workingPath, setWorkingPath] = useState<string | null>(null);
   const [pageCount, setPageCount] = useState(0);
@@ -45,21 +57,37 @@ export default function App() {
   const [passwordError, setPasswordError] = useState("");
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
-  const [previewOpen, setPreviewOpen] = useState(false);
-  const [tables, setTables] = useState<ExtractedTable[]>([]);
   const [customTemplates, setCustomTemplates] = useState<StatementTemplate[]>([]);
   const [activeTemplate, setActiveTemplate] = useState<StatementTemplate | null>(null);
   const [viewerWidth, setViewerWidth] = useState(720);
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
+  const [pendingPdf, setPendingPdf] = useState<OpenedPdf | null>(null);
   const viewerRef = useRef<HTMLDivElement>(null);
+  const stepHeadingRef = useRef<HTMLHeadingElement>(null);
   const passwordCallback = useRef<((password: string) => void) | null>(null);
   const autodetectedFor = useRef<string | null>(null);
 
   const templates = useMemo(() => allTemplates(customTemplates), [customTemplates]);
+  const activeSelections = useMemo(
+    () => selections.filter((selection) => !excludedPages.has(selection.page)),
+    [selections, excludedPages],
+  );
+  const areas = useMemo<TableArea[]>(
+    () => activeSelections.map(({ id: _id, ...area }) => area),
+    [activeSelections],
+  );
+  const areaKey = JSON.stringify(areas);
+  const canSelect = Boolean(pdf);
+  const canReview = areas.length > 0;
+  const canContinue = areas.length > 0 && !busy;
 
   useEffect(() => {
     void loadCustomTemplates().then(setCustomTemplates);
   }, []);
+
+  useEffect(() => {
+    stepHeadingRef.current?.focus();
+  }, [step]);
 
   useEffect(() => {
     if (!pdf) {
@@ -74,19 +102,17 @@ export default function App() {
   }, [pdf]);
 
   useEffect(() => {
+    if (step !== "select") return;
     const node = viewerRef.current;
     if (!node) return;
-    const update = () => setViewerWidth(Math.max(360, node.clientWidth - 48));
+    const update = () => setViewerWidth(Math.max(280, node.clientWidth - 24));
     update();
     const observer = new ResizeObserver(update);
     observer.observe(node);
     return () => observer.disconnect();
-  }, [screen]);
+  }, [step]);
 
-  const reset = () => {
-    setScreen("open");
-    setPdf(null);
-    setWorkingPath(null);
+  const clearWorkspace = () => {
     setPageCount(0);
     setCurrentPage(1);
     setSelections([]);
@@ -96,15 +122,13 @@ export default function App() {
     setPasswordError("");
     setBusy(false);
     setStatus("");
-    setPreviewOpen(false);
-    setTables([]);
     setActiveTemplate(null);
     passwordCallback.current = null;
     autodetectedFor.current = null;
   };
 
   const persistTempPdf = async (next: OpenedPdf) => {
-    if (typeof window !== "undefined" && !("__TAURI_INTERNALS__" in window)) {
+    if (!isTauri()) {
       setWorkingPath(next.path);
       return next.path;
     }
@@ -115,16 +139,42 @@ export default function App() {
     return path;
   };
 
-  const handleOpen = async (next: OpenedPdf) => {
+  const openPdf = async (next: OpenedPdf) => {
+    clearWorkspace();
     setPdf(next);
-    setNeedPassword(false);
-    setPasswordError("");
-    setScreen("workspace");
+    setStep("select");
     try {
       await persistTempPdf(next);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error));
     }
+  };
+
+  const handleOpen = (next: OpenedPdf) => {
+    if (pdf) {
+      setPendingPdf(next);
+      return;
+    }
+    void openPdf(next);
+  };
+
+  const changePdf = async () => {
+    try {
+      const next = await pickPdf();
+      if (next) handleOpen(next);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const setExtractionMethod = (next: ExtractionMethod) => {
+    setMethod(next);
+    setSelections((current) => current.map((selection) => ({ ...selection, method: next })));
+    setStatus(
+      next === "lattice"
+        ? "Using ruled lines. Draw or adjust the box if columns still look off."
+        : "Using flowing text.",
+    );
   };
 
   const includedPages = () =>
@@ -140,14 +190,14 @@ export default function App() {
     for (const page of includedPages()) {
       const metrics = pageMetrics[page] ?? fallback;
       const specific = template.areas.filter((area) => area.page === page);
-      const areas = specific.length > 0 ? specific : template.areas.filter((area) => area.page === 0);
-      for (const area of areas) {
+      const pageAreas = specific.length > 0 ? specific : template.areas.filter((area) => area.page === 0);
+      for (const area of pageAreas) {
         next.push(applyTemplateArea(area, page, metrics, { normalized: template.normalized }));
       }
     }
     setSelections(next);
     setActiveTemplate(template);
-    setStatus(`Applied “${template.name}”. Adjust the boxes if needed.`);
+    setStatus(`Applied “${template.name}”. Adjust the boxes if the table looks off.`);
   };
 
   const saveTemplate = async (name: string) => {
@@ -162,21 +212,17 @@ export default function App() {
     const next = [...customTemplates, template];
     setCustomTemplates(next);
     await saveCustomTemplates(next);
-    setStatus(`Saved template “${name}”.`);
+    setStatus(`Saved “${name}” for later statements with this layout.`);
   };
 
   const autodetect = async () => {
-    if (!workingPath) return;
-    if (typeof window !== "undefined" && !("__TAURI_INTERNALS__" in window)) {
-      setStatus("Autodetect needs the desktop app (pnpm tauri dev).");
-      return;
-    }
+    if (!workingPath || !isTauri()) return;
     setBusy(true);
-    setStatus("Autodetecting tables…");
+    setStatus("Looking for transaction tables…");
     try {
       const pages = pageCount > 0 ? includedPages().join(",") : "all";
-      const { areas, raw } = await TabulaService.guessTables(workingPath, pdf?.password, pages);
-      const next = areas
+      const { areas: foundAreas, raw } = await TabulaService.guessTables(workingPath, pdf?.password, pages);
+      const next = foundAreas
         .filter((area) => !excludedPages.has(area.page))
         .map((area) => ({
           ...area,
@@ -189,7 +235,7 @@ export default function App() {
       setActiveTemplate(matched ?? null);
       const found = next.length
         ? `Found ${next.length} table region${next.length === 1 ? "" : "s"}.`
-        : "No tables detected. Draw a box instead.";
+        : "No tables detected. Draw a box around the transaction table.";
       setStatus(matched ? `${found} Using “${matched.name}” cleanup.` : found);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -205,42 +251,40 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (!workingPath || pageCount < 1) return;
-    if (typeof window !== "undefined" && !("__TAURI_INTERNALS__" in window)) return;
+    if (!workingPath || pageCount < 1 || !isTauri()) return;
     if (autodetectedFor.current === workingPath) return;
     autodetectedFor.current = workingPath;
     void autodetect();
+    // Autodetect once per opened file after the page count is known.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workingPath, pageCount]);
 
-  const preview = async () => {
-    if (!workingPath) return;
-    const areas = selections
-      .filter((selection) => !excludedPages.has(selection.page))
-      .map(({ id: _id, ...area }) => area);
-    if (areas.length === 0) return;
-    setBusy(true);
-    setStatus("Extracting selected tables…");
-    try {
-      const extracted = await TabulaService.extractTables(workingPath, areas, pdf?.password, {
+  const extractQuery = useQuery({
+    queryKey: [
+      "extract",
+      workingPath,
+      areaKey,
+      pdf?.password ?? "",
+      activeTemplate?.id ?? "",
+      activeTemplate?.skipRows,
+      activeTemplate?.columns,
+      activeTemplate?.mergeRows,
+    ],
+    queryFn: () =>
+      TabulaService.extractTables(workingPath!, areas, pdf?.password, {
         skipRows: activeTemplate?.skipRows,
         columns: activeTemplate?.columns,
         mergeRows: activeTemplate?.mergeRows,
-      });
-      setTables(extracted);
-      setPreviewOpen(true);
-      setStatus("");
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (TabulaService.isPasswordError(message)) {
-        setNeedPassword(true);
-        setPasswordError("This PDF needs a password.");
-      } else {
-        setStatus(message);
-      }
-    } finally {
-      setBusy(false);
-    }
-  };
+      }),
+    enabled: step === "review" && isTauri() && Boolean(workingPath) && areas.length > 0,
+  });
+
+  useEffect(() => {
+    const message = extractQuery.error instanceof Error ? extractQuery.error.message : "";
+    if (!message || !TabulaService.isPasswordError(message)) return;
+    setNeedPassword(true);
+    setPasswordError("This PDF needs a password.");
+  }, [extractQuery.error]);
 
   const submitPassword = (password: string) => {
     passwordCallback.current?.(password);
@@ -250,122 +294,233 @@ export default function App() {
     setPasswordError("");
   };
 
-  if (!pdf || screen === "open") {
-    return (
-      <div className="flex h-full flex-col">
-        <header className="border-b bg-card px-6 py-4">
-          <p className="text-xs font-semibold tracking-[0.16em] text-muted-foreground">PESAVIEW</p>
-          <h1 className="text-2xl font-semibold tracking-tight">Extract statement tables</h1>
-        </header>
-        <main className="flex flex-1 items-center px-6">
-          <FileOpener onOpen={(next) => void handleOpen(next)} busy={busy} />
-        </main>
-      </div>
-    );
-  }
+  const cancelPassword = () => {
+    passwordCallback.current = null;
+    setNeedPassword(false);
+    setPasswordError("");
+    setStatus("This statement needs a password to preview or extract.");
+  };
+
+  const goStep = (next: WizardStep) => {
+    if (next === "upload") {
+      setStep("upload");
+      return;
+    }
+    if (next === "select" && pdf) {
+      setStep("select");
+      return;
+    }
+    if (next === "review" && canReview) {
+      setStep("review");
+    }
+  };
+
+  const continueHint = busy
+    ? "Wait until the tables are found."
+    : selections.length > 0 && areas.length === 0
+      ? "Include a page to continue."
+      : "Draw a box around the transaction table first.";
+
+  const extractError =
+    extractQuery.error instanceof Error
+      ? TabulaService.isPasswordError(extractQuery.error.message)
+        ? "Unlock the PDF to extract these tables."
+        : extractQuery.error.message
+      : undefined;
 
   return (
-    <div className="flex h-full flex-col">
-      <WorkspaceToolbar
-        fileName={pdf.name}
-        selectionCount={selections.filter((selection) => !excludedPages.has(selection.page)).length}
-        busy={busy}
-        method={method}
-        templates={templates}
-        onMethodChange={setMethod}
-        onApplyTemplate={applyTemplate}
-        onSaveTemplate={(name) => void saveTemplate(name)}
-        onClear={() => {
-          setSelections([]);
-          setActiveTemplate(null);
-        }}
-        onAutodetect={() => void autodetect()}
-        onPreview={() => void preview()}
-        onClose={reset}
+    <div className="relative flex h-full flex-col">
+      <WizardHeader
+        step={step}
+        canSelect={canSelect}
+        canReview={canReview}
+        fileName={pdf?.name}
+        onStep={goStep}
       />
 
-      <div className="relative flex min-h-0 flex-1">
-        {!pdfUrl ? (
-          <p className="p-6 text-sm text-muted-foreground">Preparing PDF…</p>
-        ) : (
-          <Document
-            className="flex min-h-0 flex-1"
-            file={pdfUrl}
-            loading={<p className="p-6 text-sm text-muted-foreground">Rendering statement…</p>}
-            onLoadSuccess={(doc) => {
-              setPageCount(doc.numPages);
-              setCurrentPage(1);
-            }}
-            onPassword={(callback) => {
-              passwordCallback.current = callback;
-              setNeedPassword(true);
-            }}
-            onLoadError={(error) => {
-              if (TabulaService.isPasswordError(error.message)) {
-                setNeedPassword(true);
-                setPasswordError("Incorrect or missing password.");
-              } else {
-                setStatus(error.message);
-              }
-            }}
-          >
-            <PageSidebar
-              pageCount={pageCount}
-              currentPage={currentPage}
-              excludedPages={excludedPages}
-              selections={selections}
-              pageMetrics={pageMetrics}
-              onSelect={setCurrentPage}
-              onExclude={(page) => {
-                setExcludedPages((current) => {
-                  const next = new Set(current);
-                  if (next.has(page)) next.delete(page);
-                  else next.add(page);
-                  return next;
-                });
-              }}
-            />
-            <div ref={viewerRef} className="min-w-0 flex-1 overflow-auto bg-[oklch(90%_0.01_247)]">
-              <div className="flex justify-center p-6">
-                {pageCount > 0 && (
-                  <PdfPageView
-                    pageNumber={currentPage}
-                    width={viewerWidth}
-                    selections={selections}
-                    defaultMethod={method}
-                    onSelectionsChange={setSelections}
-                    onMetrics={(metrics) =>
-                      setPageMetrics((current) => ({ ...current, [currentPage]: metrics }))
-                    }
-                  />
-                )}
-              </div>
-            </div>
-          </Document>
+      <div
+        hidden={step !== "upload" && Boolean(pdf)}
+        inert={step !== "upload" && Boolean(pdf) ? true : undefined}
+        className={cn(
+          "flex-1 items-center px-3",
+          step === "upload" || !pdf ? "flex" : "hidden",
         )}
-        {needPassword && (
-          <div className="absolute inset-0 z-50 flex items-center justify-center bg-background/85 p-6 backdrop-blur-sm">
-            <PasswordPrompt
-              fileName={pdf.name}
-              error={passwordError}
-              busy={busy}
-              onSubmit={submitPassword}
-              onCancel={reset}
-            />
-          </div>
-        )}
+      >
+        <FileOpener
+          onOpen={handleOpen}
+          busy={busy}
+          currentFile={pdf ? { name: pdf.name, pageCount: pageCount || undefined } : undefined}
+          onKeepFile={() => setStep("select")}
+          headingRef={step === "upload" ? stepHeadingRef : undefined}
+        />
       </div>
 
-      {status && (
-        <div className="border-t bg-card px-4 py-2 text-sm text-muted-foreground">{status}</div>
+      {pdf && (
+        <div
+          hidden={step !== "select"}
+          inert={step !== "select" ? true : undefined}
+          className={cn("min-h-0 flex-1 flex-col", step === "select" ? "flex" : "hidden")}
+        >
+          <SelectToolbar
+            headingRef={step === "select" ? stepHeadingRef : undefined}
+            selectionCount={areas.length}
+            busy={busy}
+            canAutodetect={isTauri()}
+            method={method}
+            templates={templates}
+            continueHint={continueHint}
+            canContinue={canContinue}
+            onMethodChange={setExtractionMethod}
+            onApplyTemplate={applyTemplate}
+            onSaveTemplate={(name) => void saveTemplate(name)}
+            onClear={() => {
+              setSelections([]);
+              setActiveTemplate(null);
+              setStatus("");
+            }}
+            onAutodetect={() => void autodetect()}
+            onContinue={() => setStep("review")}
+            onChangePdf={() => void changePdf()}
+          />
+
+          <div className="relative flex min-h-0 flex-1">
+            {!pdfUrl ? (
+              <p className="p-3 text-sm text-muted-foreground">Preparing PDF…</p>
+            ) : (
+              <Document
+                className="flex min-h-0 flex-1"
+                file={pdfUrl}
+                loading={<p className="p-3 text-sm text-muted-foreground">Rendering statement…</p>}
+                onLoadSuccess={(doc) => {
+                  setPageCount(doc.numPages);
+                }}
+                onPassword={(callback) => {
+                  passwordCallback.current = callback;
+                  setNeedPassword(true);
+                }}
+                onLoadError={(error) => {
+                  if (TabulaService.isPasswordError(error.message)) {
+                    setNeedPassword(true);
+                    setPasswordError("Incorrect or missing password.");
+                  } else {
+                    setStatus(error.message);
+                  }
+                }}
+              >
+                <PageSidebar
+                  pageCount={pageCount}
+                  currentPage={currentPage}
+                  excludedPages={excludedPages}
+                  selections={selections}
+                  pageMetrics={pageMetrics}
+                  onSelect={setCurrentPage}
+                  onExclude={(page) => {
+                    setExcludedPages((current) => {
+                      const next = new Set(current);
+                      if (next.has(page)) next.delete(page);
+                      else next.add(page);
+                      return next;
+                    });
+                  }}
+                />
+                <div ref={viewerRef} className="relative min-w-0 flex-1 overflow-auto bg-muted/50">
+                  {selections.length === 0 && !busy && (
+                    <p className="pointer-events-none absolute top-4 left-1/2 z-10 -translate-x-1/2 rounded-full border bg-card px-3 py-1.5 text-sm text-muted-foreground shadow-xs">
+                      Drag a box around the transaction table
+                    </p>
+                  )}
+                  {selections.length > 0 && areas.length === 0 && (
+                    <p className="pointer-events-none absolute top-4 left-1/2 z-10 -translate-x-1/2 rounded-full border bg-card px-3 py-1.5 text-sm text-muted-foreground shadow-xs">
+                      Include a page to continue
+                    </p>
+                  )}
+                  <div className="flex justify-center p-2">
+                    {pageCount > 0 && (
+                      <PdfPageView
+                        pageNumber={currentPage}
+                        width={viewerWidth}
+                        selections={selections}
+                        defaultMethod={method}
+                        onSelectionsChange={setSelections}
+                        onMetrics={(metrics) =>
+                          setPageMetrics((current) => ({ ...current, [currentPage]: metrics }))
+                        }
+                      />
+                    )}
+                  </div>
+                </div>
+              </Document>
+            )}
+            {needPassword && (
+              <div className="absolute inset-0 z-50 flex items-center justify-center bg-background/90 p-6">
+                <PasswordPrompt
+                  fileName={pdf.name}
+                  error={passwordError}
+                  busy={busy}
+                  onSubmit={submitPassword}
+                  onCancel={cancelPassword}
+                />
+              </div>
+            )}
+          </div>
+
+          {status && (
+            <div className="border-t bg-card px-2 py-1 text-xs text-muted-foreground">{status}</div>
+          )}
+        </div>
       )}
 
-      <PreviewDialog
-        open={previewOpen}
-        tables={tables}
-        fileName={pdf.name}
-        onOpenChange={setPreviewOpen}
-      />
+      {pdf && step === "review" && (
+        <ReviewStep
+          key={`${workingPath}-${areaKey}`}
+          headingRef={stepHeadingRef}
+          tables={extractQuery.data ?? []}
+          fileName={pdf.name}
+          loading={extractQuery.isFetching}
+          error={extractError}
+          canExtract={isTauri()}
+          templateName={activeTemplate?.name}
+          boxCount={areas.length}
+          onBack={() => setStep("select")}
+          onChangePdf={() => void changePdf()}
+        />
+      )}
+
+      {needPassword && step === "review" && pdf && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-background/90 p-6">
+          <PasswordPrompt
+            fileName={pdf.name}
+            error={passwordError}
+            busy={busy}
+            onSubmit={submitPassword}
+            onCancel={cancelPassword}
+          />
+        </div>
+      )}
+
+      <Dialog open={pendingPdf !== null} onOpenChange={(open) => !open && setPendingPdf(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Replace with {pendingPdf?.name}?</DialogTitle>
+            <DialogDescription>
+              Table boxes and any cell corrections will be cleared.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="destructive-outline"
+              onClick={() => {
+                const next = pendingPdf;
+                setPendingPdf(null);
+                if (next) void openPdf(next);
+              }}
+            >
+              Replace PDF
+            </Button>
+            <Button onClick={() => setPendingPdf(null)}>Keep this file</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

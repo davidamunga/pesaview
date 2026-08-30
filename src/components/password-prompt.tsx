@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
-import { FileText, Lock, Shield } from "lucide-react";
+import { FileText, Lock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { PasswordInput } from "@/components/ui/password-input";
 import { cn } from "@/lib/utils";
@@ -88,11 +88,6 @@ export function PasswordPrompt({
           Cancel
         </Button>
       </div>
-
-      <p className="flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
-        <Shield className="size-3.5" />
-        Password never leaves this device
-      </p>
     </form>
   );
 }

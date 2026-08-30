@@ -13,10 +13,12 @@
     "windows": [
       {
         "title": "PesaView",
-        "width": 1280,
-        "height": 800,
-        "minWidth": 960,
-        "minHeight": 640,
+        "hiddenTitle": true,
+        "width": 960,
+        "height": 680,
+        "minWidth": 800,
+        "minHeight": 560,
+        "center": true,
         "resizable": true
       }
     ],

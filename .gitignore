@@ -24,3 +24,5 @@ src-tauri/resources/.temp-jre-download
 *.njsproj
 *.sln
 *.sw?
+
+.impeccable.md

@@ -10,6 +10,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -46,7 +47,7 @@ export function TemplatesMenu({
       <DropdownMenu>
         <DropdownMenuTrigger
           render={
-            <Button variant="outline" disabled={disabled} className="bg-sky-50 text-sky-800">
+            <Button variant="outline" size="xs" disabled={disabled}>
               <LayoutTemplate />
               Templates
             </Button>
@@ -55,7 +56,7 @@ export function TemplatesMenu({
         <DropdownMenuContent align="end" className="w-64">
           {bundled.length > 0 && (
             <DropdownMenuGroup>
-              <DropdownMenuLabel>Example layouts</DropdownMenuLabel>
+              <DropdownMenuLabel>Bank layouts</DropdownMenuLabel>
               {bundled.map((template) => (
                 <DropdownMenuItem key={template.id} onClick={() => onApply(template)}>
                   {template.name}
@@ -92,7 +93,10 @@ export function TemplatesMenu({
             </DialogDescription>
           </DialogHeader>
           <div className="px-6 pb-2">
+            <Label htmlFor="template-name">Template name</Label>
             <Input
+              id="template-name"
+              className="mt-1.5"
               placeholder="e.g. My bank layout"
               value={name}
               onChange={(event) => setName(event.target.value)}

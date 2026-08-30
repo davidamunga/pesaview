@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import ExcelJS from "exceljs";
 import Papa from "papaparse";
-import type { ExtractedTable } from "@/types";
+import type { CellCorrection, ExtractedTable } from "@/types";
 import { flattenTables } from "@/lib/tabulaJson";
 
 export async function exportCsv(tables: ExtractedTable[], defaultName: string): Promise<string> {
@@ -18,7 +18,11 @@ export async function exportCsv(tables: ExtractedTable[], defaultName: string): 
   });
 }
 
-export async function exportXlsx(tables: ExtractedTable[], defaultName: string): Promise<string> {
+export async function exportXlsx(
+  tables: ExtractedTable[],
+  defaultName: string,
+  corrections: CellCorrection[] = [],
+): Promise<string> {
   const workbook = new ExcelJS.Workbook();
   workbook.creator = "PesaView";
 
@@ -27,10 +31,19 @@ export async function exportXlsx(tables: ExtractedTable[], defaultName: string):
   } else if (tables.length === 1) {
     addSheet(workbook, "Extracted", tables[0].columns, tables[0].rows);
   } else {
+    addSheet(workbook, "Extracted", ...toFlat(tables));
     tables.forEach((table, index) => {
       addSheet(workbook, `Page ${table.page} (${index + 1})`, table.columns, table.rows);
     });
   }
+
+  addSheet(workbook, "Corrections", ["Page", "Row", "Column", "Old", "New"], corrections.map((item) => [
+    String(item.page),
+    String(item.row),
+    item.column,
+    item.oldValue,
+    item.newValue,
+  ]));
 
   const buffer = await workbook.xlsx.writeBuffer();
   const bytes = new Uint8Array(buffer);
@@ -39,6 +52,11 @@ export async function exportXlsx(tables: ExtractedTable[], defaultName: string):
     defaultFilename: defaultName.replace(/\.pdf$/i, "") + ".xlsx",
     fileType: "xlsx",
   });
+}
+
+function toFlat(tables: ExtractedTable[]): [string[], string[][]] {
+  const flat = flattenTables(tables);
+  return [flat.columns, flat.rows.filter((row) => row.some((cell) => cell.length > 0))];
 }
 
 function addSheet(

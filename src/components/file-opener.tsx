@@ -1,21 +1,28 @@
-import { useEffect, useRef, useState, type ChangeEvent } from "react";
+import { useEffect, useState, type RefObject } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { open } from "@tauri-apps/plugin-dialog";
 import { readFile } from "@tauri-apps/plugin-fs";
-import { FileUp, Shield } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { pickPdf } from "@/lib/pickPdf";
 import { cn } from "@/lib/utils";
 import type { OpenedPdf } from "@/types";
 
 interface FileOpenerProps {
   onOpen: (pdf: OpenedPdf) => void;
   busy?: boolean;
+  currentFile?: { name: string; pageCount?: number };
+  onKeepFile?: () => void;
+  headingRef?: RefObject<HTMLHeadingElement | null>;
 }
 
-export function FileOpener({ onOpen, busy }: FileOpenerProps) {
+export function FileOpener({
+  onOpen,
+  busy,
+  currentFile,
+  onKeepFile,
+  headingRef,
+}: FileOpenerProps) {
   const [dragActive, setDragActive] = useState(false);
   const [error, setError] = useState("");
-  const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -41,7 +48,7 @@ export function FileOpener({ onOpen, busy }: FileOpenerProps) {
           }
         });
       } catch {
-        // Browser / non-Tauri fallback uses the hidden file input.
+        // Browser preview has no Tauri drag-drop events.
       }
     };
 
@@ -60,89 +67,106 @@ export function FileOpener({ onOpen, busy }: FileOpenerProps) {
     }
   };
 
-  const isTauriRuntime = () =>
-    typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-
   const browse = async () => {
     setError("");
-    if (!isTauriRuntime()) {
-      inputRef.current?.click();
-      return;
-    }
     try {
-      const selected = await open({
-        multiple: false,
-        filters: [{ name: "PDF", extensions: ["pdf"] }],
-      });
-      if (typeof selected === "string") {
-        await openFromPath(selected);
-      }
-    } catch {
-      inputRef.current?.click();
+      const next = await pickPdf();
+      if (next) onOpen(next);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not read that PDF. Try Browse instead.");
     }
   };
 
-  const onInputChange = async (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    if (!file.name.toLowerCase().endsWith(".pdf")) {
-      setError("Please choose a PDF file.");
-      return;
-    }
-    const data = new Uint8Array(await file.arrayBuffer());
-    onOpen({ path: file.name, name: file.name, data });
-  };
+  const HeadingTag = headingRef ? "h1" : "p";
+
+  if (currentFile) {
+    return (
+      <div className="mx-auto flex w-full max-w-lg flex-col gap-3">
+        <div className="rounded-xl border bg-card px-5 py-6">
+          <HeadingTag
+            ref={headingRef}
+            tabIndex={headingRef ? -1 : undefined}
+            className="text-base font-semibold outline-none"
+          >
+            This statement
+          </HeadingTag>
+          <p className="mt-2 truncate text-sm" title={currentFile.name}>
+            {currentFile.name}
+          </p>
+          {currentFile.pageCount ? (
+            <p className="mt-1 text-sm text-muted-foreground">
+              {currentFile.pageCount} {currentFile.pageCount === 1 ? "page" : "pages"}
+            </p>
+          ) : null}
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Button disabled={busy} onClick={onKeepFile}>
+              Continue with this file
+            </Button>
+            <Button variant="outline" disabled={busy} onClick={() => void browse()}>
+              Replace PDF…
+            </Button>
+          </div>
+        </div>
+        {error && (
+          <p className="rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+            {error}
+          </p>
+        )}
+      </div>
+    );
+  }
 
   return (
-    <div className="mx-auto flex w-full max-w-xl flex-col gap-4">
+    <div className="mx-auto flex w-full max-w-lg flex-col gap-3">
       <div
-        className={cn(
-          "relative flex min-h-72 cursor-pointer flex-col items-center justify-center overflow-hidden rounded-2xl border border-dashed px-8 py-12 text-center transition",
-          dragActive
-            ? "border-primary bg-primary/8 scale-[1.01]"
-            : "border-muted-foreground/30 bg-card hover:border-primary/50 hover:bg-muted/30",
-        )}
         role="button"
         tabIndex={0}
+        aria-label="Drop a PDF statement or browse to open one"
+        className={cn(
+          "relative flex min-h-52 cursor-pointer flex-col items-center justify-center overflow-hidden rounded-xl border border-dashed px-6 py-8 text-center transition outline-none",
+          "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+          dragActive
+            ? "border-primary bg-primary/8"
+            : "border-muted-foreground/30 bg-card hover:border-primary/50 hover:bg-muted/30",
+        )}
         onClick={() => void browse()}
         onKeyDown={(event) => {
-          if (event.key === "Enter" || event.key === " ") void browse();
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            void browse();
+          }
         }}
       >
-        <FileUp
-          className={cn(
-            "mb-4 size-11 stroke-[1.25]",
-            dragActive ? "text-primary" : "text-muted-foreground/60",
-          )}
-        />
-        <h2 className="text-lg font-semibold">
+        <HeadingTag
+          ref={headingRef}
+          tabIndex={headingRef ? -1 : undefined}
+          className="text-base font-semibold outline-none"
+        >
           {dragActive ? "Release to open" : "Drop a bank or M-PESA statement"}
-        </h2>
+        </HeadingTag>
         <p className="mt-1.5 max-w-sm text-sm text-muted-foreground">
-          Preview the PDF, draw table regions, then export CSV or Excel. Files stay on this device.
+          Then mark the transaction table, review the rows, and export CSV or Excel. The file stays
+          on this device.
         </p>
         {!dragActive && (
-          <Button className="mt-6" disabled={busy} onClick={() => void browse()}>
+          <Button
+            className="mt-4"
+            size="sm"
+            disabled={busy}
+            onClick={(event) => {
+              event.stopPropagation();
+              void browse();
+            }}
+          >
             Browse PDF
           </Button>
         )}
       </div>
-      <input
-        ref={inputRef}
-        type="file"
-        accept="application/pdf"
-        className="hidden"
-        onChange={(event) => void onInputChange(event)}
-      />
       {error && (
         <p className="rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive">
           {error}
         </p>
       )}
-      <p className="flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
-        <Shield className="size-3.5" />
-        100% local — Tabula runs on your machine
-      </p>
     </div>
   );
 }
