@@ -1,0 +1,26 @@
+{
+  "id": "equity-ledger",
+  "name": "Equity ledger",
+  "normalized": true,
+  "match": ["particulars", "money out", "money in"],
+  "skipRows": ["Page Total", "Grand Total", "Note:", "Uncleared"],
+  "columns": ["Date / Value", "Particulars", "Money Out", "Money In", "Balance"],
+  "areas": [
+    {
+      "page": 1,
+      "top": 0.24,
+      "left": 0.025,
+      "bottom": 0.95,
+      "right": 0.98,
+      "method": "stream"
+    },
+    {
+      "page": 0,
+      "top": 0.12,
+      "left": 0.025,
+      "bottom": 0.95,
+      "right": 0.98,
+      "method": "stream"
+    }
+  ]
+}

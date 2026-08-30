@@ -1,0 +1,92 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --font-sans: "Avenir Next", "Segoe UI", "Helvetica Neue", sans-serif;
+}
+
+:root {
+  color-scheme: light;
+  --radius: 0.5rem;
+  --background: oklch(96.8% 0.006 247);
+  --foreground: oklch(22% 0.02 250);
+  --card: oklch(99.2% 0.002 247);
+  --card-foreground: oklch(22% 0.02 250);
+  --popover: oklch(99.4% 0.002 247);
+  --popover-foreground: oklch(22% 0.02 250);
+  --primary: oklch(55% 0.14 145);
+  --primary-foreground: oklch(98% 0.01 145);
+  --secondary: oklch(94% 0.012 240);
+  --secondary-foreground: oklch(28% 0.03 250);
+  --muted: oklch(93.6% 0.01 247);
+  --muted-foreground: oklch(48% 0.02 250);
+  --accent: oklch(93% 0.02 230);
+  --accent-foreground: oklch(28% 0.04 250);
+  --destructive: oklch(55% 0.2 25);
+  --border: oklch(88% 0.012 247);
+  --input: oklch(88% 0.012 247);
+  --ring: oklch(55% 0.1 230);
+  --sidebar: oklch(97.6% 0.006 247);
+  --sidebar-foreground: oklch(22% 0.02 250);
+  --sidebar-primary: oklch(55% 0.14 145);
+  --sidebar-primary-foreground: oklch(98% 0.01 145);
+  --sidebar-accent: oklch(93% 0.02 230);
+  --sidebar-accent-foreground: oklch(28% 0.04 250);
+  --sidebar-border: oklch(88% 0.012 247);
+  --sidebar-ring: oklch(55% 0.1 230);
+  --success: oklch(55% 0.14 145);
+  --success-foreground: oklch(30% 0.08 145);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  overflow: hidden;
+}
+
+.selection-box {
+  border: 1.5px dashed oklch(58% 0.2 18);
+  background: oklch(70% 0.16 18 / 18%);
+}

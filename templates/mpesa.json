@@ -1,0 +1,25 @@
+{
+  "id": "mpesa",
+  "name": "M-PESA statement",
+  "normalized": true,
+  "match": ["receipt no", "completion", "paid in"],
+  "skipRows": ["Disclaimer", "Note:"],
+  "areas": [
+    {
+      "page": 1,
+      "top": 0.32,
+      "left": 0.04,
+      "bottom": 0.94,
+      "right": 0.96,
+      "method": "stream"
+    },
+    {
+      "page": 0,
+      "top": 0.12,
+      "left": 0.04,
+      "bottom": 0.94,
+      "right": 0.96,
+      "method": "stream"
+    }
+  ]
+}

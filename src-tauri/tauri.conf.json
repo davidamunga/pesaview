@@ -1,0 +1,46 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "PesaView",
+  "version": "0.1.0",
+  "identifier": "com.amunga.david.pesaview",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "PesaView",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 960,
+        "minHeight": 640,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' blob:; worker-src 'self' blob:"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": {
+      "resources/tabula-1.0.5-jar-with-dependencies.jar": "./",
+      "resources/build-jre": "build-jre"
+    },
+    "publisher": "David Amunga",
+    "category": "Utility",
+    "shortDescription": "Extract tables from bank and M-PESA statement PDFs",
+    "longDescription": "A desktop app that previews statement PDFs, lets you select or autodetect table regions, and exports the extracted data to CSV or Excel. Processing stays on your device."
+  }
+}
