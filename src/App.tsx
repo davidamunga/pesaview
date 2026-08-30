@@ -23,6 +23,12 @@ import {
 import { applyTemplateArea } from "@/lib/coordinates";
 import { matchTemplate } from "@/lib/matchTemplate";
 import { pickPdf } from "@/lib/pickPdf";
+import {
+  planAutodetect,
+  rememberCopy,
+  stampSelectionsToEmptyPages,
+  suggestLayout,
+} from "@/lib/rememberLayout";
 import { cn, createId, isTauri } from "@/lib/utils";
 import { TabulaService } from "@/services/tabulaService";
 import {
@@ -59,6 +65,8 @@ export default function App() {
   const [status, setStatus] = useState("");
   const [customTemplates, setCustomTemplates] = useState<StatementTemplate[]>([]);
   const [activeTemplate, setActiveTemplate] = useState<StatementTemplate | null>(null);
+  const [detectSample, setDetectSample] = useState("");
+  const [layoutRemembered, setLayoutRemembered] = useState(false);
   const [viewerWidth, setViewerWidth] = useState(720);
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const [pendingPdf, setPendingPdf] = useState<OpenedPdf | null>(null);
@@ -66,6 +74,7 @@ export default function App() {
   const stepHeadingRef = useRef<HTMLHeadingElement>(null);
   const passwordCallback = useRef<((password: string) => void) | null>(null);
   const autodetectedFor = useRef<string | null>(null);
+  const pendingApply = useRef<StatementTemplate | null>(null);
 
   const templates = useMemo(() => allTemplates(customTemplates), [customTemplates]);
   const activeSelections = useMemo(
@@ -80,6 +89,10 @@ export default function App() {
   const canSelect = Boolean(pdf);
   const canReview = areas.length > 0;
   const canContinue = areas.length > 0 && !busy;
+  const layoutSuggestion = useMemo(
+    () => suggestLayout(detectSample, pdf?.name),
+    [detectSample, pdf?.name],
+  );
 
   useEffect(() => {
     void loadCustomTemplates().then(setCustomTemplates);
@@ -123,8 +136,11 @@ export default function App() {
     setBusy(false);
     setStatus("");
     setActiveTemplate(null);
+    setDetectSample("");
+    setLayoutRemembered(false);
     passwordCallback.current = null;
     autodetectedFor.current = null;
+    pendingApply.current = null;
   };
 
   const persistTempPdf = async (next: OpenedPdf) => {
@@ -200,19 +216,42 @@ export default function App() {
     setStatus(`Applied “${template.name}”. Adjust the boxes if the table looks off.`);
   };
 
-  const saveTemplate = async (name: string) => {
-    const metrics = pageMetrics[currentPage];
+  const rememberLayout = async (name: string, extras?: { columns?: string[]; match?: string[] }) => {
+    const metrics = pageMetrics[currentPage] ?? Object.values(pageMetrics)[0];
     if (!metrics || selections.length === 0) return;
-    const template = templateFromSelections(name, selections, metrics, {
-      skipRows: activeTemplate?.skipRows,
-      columns: activeTemplate?.columns,
-      match: activeTemplate?.match,
-      mergeRows: activeTemplate?.mergeRows,
-    });
+    const suggestion = suggestLayout(detectSample, pdf?.name);
+    const match = extras?.match ?? activeTemplate?.match ?? suggestion.match;
+    const template = templateFromSelections(
+      name,
+      selections,
+      metrics,
+      {
+        skipRows: activeTemplate?.skipRows,
+        columns: extras?.columns ?? activeTemplate?.columns,
+        match: match.length > 0 ? match : undefined,
+        mergeRows: activeTemplate?.mergeRows,
+      },
+      pageMetrics,
+    );
     const next = [...customTemplates, template];
     setCustomTemplates(next);
     await saveCustomTemplates(next);
+    setActiveTemplate(template);
+    setLayoutRemembered(true);
     setStatus(`Saved “${name}” for later statements with this layout.`);
+  };
+
+  const handleSelectionsChange = (next: Selection[]) => {
+    const stamped = stampSelectionsToEmptyPages(
+      next,
+      includedPages(),
+      pageMetrics,
+      pageMetrics[currentPage],
+    );
+    setSelections(stamped);
+    if (stamped.length > next.length) {
+      setStatus("Using this box on the other pages. Continue to check the rows.");
+    }
   };
 
   const autodetect = async () => {
@@ -230,13 +269,39 @@ export default function App() {
           method: "stream" as ExtractionMethod,
         }));
       const matched = matchTemplate(raw, templates);
+      const plan = planAutodetect(next.length, matched);
       setMethod("stream");
-      setSelections(next);
-      setActiveTemplate(matched ?? null);
-      const found = next.length
-        ? `Found ${next.length} table region${next.length === 1 ? "" : "s"}.`
-        : "No tables detected. Draw a box around the transaction table.";
-      setStatus(matched ? `${found} Using “${matched.name}” cleanup.` : found);
+      setDetectSample(raw);
+      if (plan.kind === "found") {
+        const stamped = stampSelectionsToEmptyPages(
+          next,
+          includedPages(),
+          pageMetrics,
+          pageMetrics[currentPage],
+        );
+        setSelections(stamped);
+        setActiveTemplate(matched ?? null);
+        setStatus(
+          stamped.length > next.length
+            ? `${plan.status.replace(/\.$/, "")}. Using this box on the other pages.`
+            : plan.status,
+        );
+        return;
+      }
+      if (plan.kind === "apply-match") {
+        const fallback = pageMetrics[currentPage] ?? pageMetrics[1];
+        if (fallback) {
+          applyTemplate(plan.template);
+        } else {
+          pendingApply.current = plan.template;
+          setActiveTemplate(plan.template);
+          setStatus(plan.status);
+        }
+        return;
+      }
+      setSelections([]);
+      setActiveTemplate(null);
+      setStatus(plan.status);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (TabulaService.isPasswordError(message)) {
@@ -258,6 +323,17 @@ export default function App() {
     // Autodetect once per opened file after the page count is known.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workingPath, pageCount]);
+
+  useEffect(() => {
+    const pending = pendingApply.current;
+    if (!pending || pageCount < 1) return;
+    const fallback = pageMetrics[currentPage] ?? pageMetrics[1];
+    if (!fallback) return;
+    pendingApply.current = null;
+    applyTemplate(pending);
+    // Apply a matched layout once the first page has metrics.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageMetrics, currentPage, pageCount]);
 
   const extractQuery = useQuery({
     queryKey: [
@@ -319,7 +395,7 @@ export default function App() {
     ? "Wait until the tables are found."
     : selections.length > 0 && areas.length === 0
       ? "Include a page to continue."
-      : "Draw a box around the transaction table first.";
+      : "Draw a box around the transaction rows first.";
 
   const extractError =
     extractQuery.error instanceof Error
@@ -372,7 +448,7 @@ export default function App() {
             canContinue={canContinue}
             onMethodChange={setExtractionMethod}
             onApplyTemplate={applyTemplate}
-            onSaveTemplate={(name) => void saveTemplate(name)}
+            onSaveTemplate={(name) => void rememberLayout(name)}
             onClear={() => {
               setSelections([]);
               setActiveTemplate(null);
@@ -426,7 +502,7 @@ export default function App() {
                 <div ref={viewerRef} className="relative min-w-0 flex-1 overflow-auto bg-muted/50">
                   {selections.length === 0 && !busy && (
                     <p className="pointer-events-none absolute top-4 left-1/2 z-10 -translate-x-1/2 rounded-full border bg-card px-3 py-1.5 text-sm text-muted-foreground shadow-xs">
-                      Drag a box around the transaction table
+                      Drag a box around the transaction rows
                     </p>
                   )}
                   {selections.length > 0 && areas.length === 0 && (
@@ -441,7 +517,7 @@ export default function App() {
                         width={viewerWidth}
                         selections={selections}
                         defaultMethod={method}
-                        onSelectionsChange={setSelections}
+                        onSelectionsChange={handleSelectionsChange}
                         onMetrics={(metrics) =>
                           setPageMetrics((current) => ({ ...current, [currentPage]: metrics }))
                         }
@@ -483,6 +559,10 @@ export default function App() {
           boxCount={areas.length}
           onBack={() => setStep("select")}
           onChangePdf={() => void changePdf()}
+          canRemember={!activeTemplate && !layoutRemembered}
+          suggestedLayoutName={layoutSuggestion.name}
+          rememberPrompt={rememberCopy(layoutSuggestion.name)}
+          onRememberLayout={(payload) => void rememberLayout(payload.name, { columns: payload.columns })}
         />
       )}
 

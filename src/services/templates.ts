@@ -1,5 +1,6 @@
 import { appDataDir, join } from "@tauri-apps/api/path";
 import { exists, mkdir, readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
+import { rememberedAreas } from "@/lib/rememberLayout";
 import type { ExtractionMethod, Selection, StatementTemplate, TemplateArea } from "@/types";
 import { createId } from "@/lib/utils";
 
@@ -101,9 +102,8 @@ export function templateFromSelections(
   selections: Selection[],
   pageMetrics: { pdfWidth: number; pdfHeight: number },
   extras?: Pick<StatementTemplate, "skipRows" | "columns" | "match" | "mergeRows">,
+  metricsByPage?: Record<number, { pdfWidth: number; pdfHeight: number }>,
 ): StatementTemplate {
-  const width = pageMetrics.pdfWidth || 1;
-  const height = pageMetrics.pdfHeight || 1;
   return {
     id: createId("tpl"),
     name,
@@ -113,13 +113,6 @@ export function templateFromSelections(
     columns: extras?.columns,
     match: extras?.match,
     mergeRows: extras?.mergeRows,
-    areas: selections.map((selection) => ({
-      page: selection.page,
-      top: selection.top / height,
-      left: selection.left / width,
-      bottom: selection.bottom / height,
-      right: selection.right / width,
-      method: selection.method,
-    })),
+    areas: rememberedAreas(selections, pageMetrics, metricsByPage),
   };
 }

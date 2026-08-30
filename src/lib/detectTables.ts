@@ -18,8 +18,11 @@ export interface TabulaTable {
   data?: TabulaCell[][];
 }
 
-const DATE =
-  /^(?:\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}|\d{4}[-/.]\d{1,2}[-/.]\d{1,2})\b/;
+const MONTH = "jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec";
+const DATE = new RegExp(
+  `^(?:\\d{1,2}[-/.]\\d{1,2}[-/.]\\d{2,4}|\\d{4}[-/.]\\d{1,2}[-/.]\\d{1,2}|\\d{1,2}[\\s-]+(?:${MONTH})[a-z]*\\.?[\\s-]+\\d{2,4})\\b`,
+  "i",
+);
 const AMOUNT = /[\d,]+\.\d{2}(?:\s*[CD]r)?/i;
 const HEADER =
   /date|value|particular|description|narration|details|debit|credit|withdraw|deposit|moneyin|moneyout|balance|amount|receipt|completion|paidin/;

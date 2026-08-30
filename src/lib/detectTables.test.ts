@@ -86,4 +86,25 @@ describe("detectTransactionAreas", () => {
     expect(areas).toHaveLength(1);
     expect(areas[0].top).toBeLessThan(200);
   });
+
+  it("treats day-month-year text dates as a ledger", () => {
+    const raw = JSON.stringify([
+      {
+        page: 1,
+        data: [
+          [
+            { text: "04 DEC 21", top: 200, left: 40, width: 70, height: 8 },
+            { text: "116.24", top: 200, left: 400, width: 50, height: 8 },
+          ],
+          [
+            { text: "05 DEC 21", top: 220, left: 40, width: 70, height: 8 },
+            { text: "226.66", top: 220, left: 400, width: 50, height: 8 },
+          ],
+        ],
+      },
+    ]);
+    const areas = detectTransactionAreas(raw);
+    expect(areas).toHaveLength(1);
+    expect(areas[0].top).toBeLessThan(200);
+  });
 });

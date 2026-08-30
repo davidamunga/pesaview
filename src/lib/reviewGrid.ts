@@ -78,6 +78,72 @@ export function projectReview(
   };
 }
 
+export type ColumnSuspectKind = "unnamed" | "empty" | "joined";
+
+export interface ColumnSuspect {
+  index: number;
+  kind: ColumnSuspectKind;
+  reason: string;
+}
+
+const EMPTY_RATIO = 0.8;
+
+function isBlank(value: string): boolean {
+  return value.trim() === "";
+}
+
+function isUnnamed(name: string): boolean {
+  const trimmed = name.trim();
+  return trimmed === "" || /^column\s*\d+$/i.test(trimmed);
+}
+
+function looksJoined(name: string): boolean {
+  const trimmed = name.trim();
+  return /^[A-Za-z]\s+[a-z]/.test(trimmed) || /\s{2,}/.test(trimmed) || /[a-z][A-Z]/.test(trimmed);
+}
+
+/** One reason per column: unnamed, then mostly-empty, then smashed names. */
+export function columnSuspects(columns: string[], rows: ReviewRow[]): ColumnSuspect[] {
+  const total = rows.length;
+  const suspects: ColumnSuspect[] = [];
+  columns.forEach((name, index) => {
+    if (isUnnamed(name)) {
+      suspects.push({ index, kind: "unnamed", reason: "Unnamed" });
+      return;
+    }
+    if (total > 0) {
+      const empty = rows.filter((row) => isBlank(row.cells[index] ?? "")).length;
+      if (empty / total >= EMPTY_RATIO) {
+        suspects.push({ index, kind: "empty", reason: "Mostly empty" });
+        return;
+      }
+    }
+    if (looksJoined(name)) {
+      suspects.push({ index, kind: "joined", reason: "Looks joined" });
+    }
+  });
+  return suspects;
+}
+
+/** Ledger amount columns — not “Value Date”. */
+export function isMoneyColumn(name: string): boolean {
+  const n = name.trim().toLowerCase();
+  return (
+    /money\s*(in|out)/.test(n) ||
+    /^(debit|credit|balance|amount|paid in|paid out|withdrawal|deposit)$/.test(n)
+  );
+}
+
+/** The transaction story column — takes leftover width. */
+export function isNarrativeColumn(name: string): boolean {
+  return /particular|detail|narrat|descrip|memo|remark/i.test(name.trim());
+}
+
+export function isDateColumn(name: string): boolean {
+  const n = name.trim().toLowerCase();
+  return /^(value\s*)?date$/.test(n) || /txn date|transaction date|value date/.test(n);
+}
+
 export function reviewToTables(columns: string[], rows: ReviewRow[]): ExtractedTable[] {
   const byPage = new Map<number, string[][]>();
   for (const row of rows) {

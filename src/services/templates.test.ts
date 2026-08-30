@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bundledTemplates, parseTemplate } from "./templates";
+import { bundledTemplates, parseTemplate, templateFromSelections } from "./templates";
 
 describe("templates", () => {
   it("loads bundled example layouts from JSON", () => {
@@ -22,5 +22,26 @@ describe("templates", () => {
     expect(template?.id).toBe("kcb-current");
     expect(template?.areas[0].page).toBe(0);
     expect(template?.skipRows).toEqual(["Page Total"]);
+  });
+
+  it("saves page 1 and a page 0 copy from a single drawn box", () => {
+    const template = templateFromSelections(
+      "NCBA Loop",
+      [
+        {
+          id: "a",
+          page: 1,
+          top: 158.4,
+          left: 61.2,
+          bottom: 712.8,
+          right: 581.4,
+          method: "stream",
+        },
+      ],
+      { pdfWidth: 612, pdfHeight: 792 },
+      { match: ["ncba", "loop"] },
+    );
+    expect(template.match).toEqual(["ncba", "loop"]);
+    expect(template.areas.map((area) => area.page)).toEqual([1, 0]);
   });
 });

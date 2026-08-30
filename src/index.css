@@ -1,3 +1,5 @@
+@import "@fontsource-variable/source-sans-3/wght.css";
+@import "@fontsource-variable/source-serif-4/wght.css";
 @import "tailwindcss";
 @import "tw-animate-css";
 
@@ -37,7 +39,9 @@
   --color-sidebar-ring: var(--sidebar-ring);
   --color-success: var(--success);
   --color-success-foreground: var(--success-foreground);
-  --font-sans: "Avenir Next", "Segoe UI", "Helvetica Neue", sans-serif;
+  --font-sans: "Source Sans 3 Variable", "Source Sans 3", sans-serif;
+  --font-serif: "Source Serif 4 Variable", "Source Serif 4", serif;
+  --font-heading: "Source Sans 3 Variable", "Source Sans 3", sans-serif;
 }
 
 :root {
@@ -125,10 +129,134 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
   overflow: hidden;
 }
 
 .selection-box {
   border: 1.5px dashed oklch(58% 0.2 18);
   background: oklch(70% 0.16 18 / 18%);
+}
+
+/* Statement ledger — one paper sheet, one ink. */
+.ledger-sheet {
+  --ledger-rule: oklch(82% 0.018 80);
+  --ledger-ink: oklch(28% 0.03 70);
+  --ledger-paper: oklch(99% 0.01 85);
+  --ledger-row: oklch(97.2% 0.012 85);
+  --ledger-hover: oklch(95.4% 0.016 85);
+  margin: 0.75rem 1rem 1.25rem;
+  overflow: hidden;
+  background: var(--ledger-paper);
+  color: var(--ledger-ink);
+  border: 1px solid oklch(84% 0.02 80);
+  box-shadow: 0 1px 0 oklch(72% 0.03 80 / 16%);
+}
+
+.dark .ledger-sheet {
+  --ledger-rule: oklch(38% 0.016 250);
+  --ledger-ink: oklch(93% 0.01 247);
+  --ledger-paper: oklch(24.5% 0.014 250);
+  --ledger-row: oklch(26.5% 0.014 250);
+  --ledger-hover: oklch(29% 0.016 250);
+  border-color: oklch(34% 0.014 247);
+  box-shadow: none;
+}
+
+.ledger-caption {
+  margin: 0;
+  padding: 0.65rem 0.85rem 0.15rem;
+  font-size: 0.75rem;
+  line-height: 1.35;
+  color: color-mix(in oklch, var(--ledger-ink) 58%, var(--ledger-paper));
+}
+
+.ledger {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.ledger thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--ledger-paper);
+  color: var(--ledger-ink);
+  border-bottom: 1px solid var(--ledger-ink);
+}
+
+.ledger tbody td {
+  border-bottom: 1px solid var(--ledger-rule);
+  background: var(--ledger-paper);
+  vertical-align: top;
+}
+
+.ledger tbody tr:nth-child(even) td {
+  background: var(--ledger-row);
+}
+
+.ledger tbody tr:hover td {
+  background: var(--ledger-hover);
+}
+
+.ledger-page {
+  width: 3.25rem;
+}
+
+.ledger-date {
+  width: 7.25rem;
+}
+
+.ledger-grow {
+  width: 100%;
+}
+
+.ledger-money,
+.ledger-plain {
+  width: 6.75rem;
+}
+
+.ledger-folio {
+  display: block;
+  padding-top: 0.4rem;
+  font-size: 0.6875rem;
+  letter-spacing: 0.04em;
+  color: color-mix(in oklch, var(--ledger-ink) 52%, var(--ledger-paper));
+}
+
+.ledger-folio-label {
+  display: block;
+  padding-bottom: 0.35rem;
+  font-size: 0.625rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: color-mix(in oklch, var(--ledger-ink) 55%, var(--ledger-paper));
+}
+
+.ledger-title {
+  width: 100%;
+  min-width: 0;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+}
+
+.ledger-narrative-input {
+  display: block;
+  width: 100%;
+  min-height: 1.75rem;
+  field-sizing: content;
+  resize: none;
+  font-family: var(--font-serif);
+  font-size: 0.875rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.ledger-amount {
+  font-variant-numeric: tabular-nums lining-nums;
 }

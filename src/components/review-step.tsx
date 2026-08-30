@@ -2,14 +2,20 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import { createColumnHelper, tableFeatures, useTable } from "@tanstack/react-table";
 import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
   applyReviewEdits,
+  columnSuspects,
   correctionsFromEdits,
   editKey,
+  isDateColumn,
+  isMoneyColumn,
+  isNarrativeColumn,
   projectReview,
   reviewToTables,
   tablesToReview,
+  type ColumnSuspect,
 } from "@/lib/reviewGrid";
 import { cn } from "@/lib/utils";
 import { exportCsv, exportXlsx } from "@/services/exportService";
@@ -18,7 +24,26 @@ import type { ExtractedTable, ReviewRow } from "@/types";
 const features = tableFeatures({});
 const helper = createColumnHelper<typeof features, ReviewRow>();
 
-const editedMark = "rounded-sm bg-amber-200/80 dark:bg-amber-400/20";
+const editedMark = "bg-amber-200/80 dark:bg-amber-400/25";
+
+type HeaderRole = "page" | "date" | "narrative" | "money" | "plain";
+
+function headerRole(id: string, names: string[]): HeaderRole {
+  if (id === "page") return "page";
+  const name = names[Number(id.slice(1))] ?? "";
+  if (isDateColumn(name)) return "date";
+  if (isMoneyColumn(name)) return "money";
+  if (isNarrativeColumn(name)) return "narrative";
+  return "plain";
+}
+
+function roleClass(role: HeaderRole, grow: boolean): string {
+  if (role === "page") return "ledger-page";
+  if (role === "date") return "ledger-date";
+  if (role === "money") return "ledger-money";
+  if (grow) return "ledger-grow";
+  return "ledger-plain";
+}
 
 interface ReviewEditContextValue {
   names: string[];
@@ -26,6 +51,7 @@ interface ReviewEditContextValue {
   edits: Record<string, string>;
   original: ReviewRow[];
   visibleCount: number;
+  suspects: ColumnSuspect[];
   rename: (index: number, next: string) => void;
   remove: (index: number) => void;
   editCell: (rowId: string, index: number, next: string) => void;
@@ -42,30 +68,57 @@ function useReviewEdit() {
 }
 
 function ColumnHeader({ index }: { index: number }) {
-  const { names, sourceNames, visibleCount, rename, remove } = useReviewEdit();
+  const { names, sourceNames, visibleCount, suspects, rename, remove } = useReviewEdit();
   const label = names[index] || `Column ${index + 1}`;
   const renamed = label !== (sourceNames[index] || `Column ${index + 1}`);
+  const suspect = suspects.find((item) => item.index === index);
+  const money = isMoneyColumn(label);
+  const lastColumn = visibleCount <= 1;
+
   return (
-    <div className="flex items-center gap-0.5">
-      <input
-        className={cn(
-          "h-6 min-w-16 max-w-36 bg-transparent px-0.5 text-xs font-medium text-foreground outline-none",
-          renamed && editedMark,
-        )}
-        value={label}
-        aria-label={`Column name ${index + 1}`}
-        onChange={(event) => rename(index, event.target.value)}
-      />
-      <button
-        type="button"
-        aria-label={`Remove ${label}`}
-        title={visibleCount <= 1 ? "Keep at least one column" : `Remove ${label}`}
-        disabled={visibleCount <= 1}
-        className="inline-flex size-6 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40"
-        onClick={() => remove(index)}
-      >
-        <X className="size-3" />
-      </button>
+    <div className="group/header flex min-w-0 flex-col gap-0.5">
+      <div className="flex items-center gap-1">
+        <input
+          className={cn(
+            "ledger-title h-7 min-w-0 flex-1 border-b border-transparent bg-transparent px-0.5 text-foreground outline-none",
+            "hover:border-current/25 focus-visible:border-current",
+            money && "text-right tabular-nums",
+            renamed && editedMark,
+            suspect && "border-amber-700/60 dark:border-amber-400/50",
+          )}
+          value={label}
+          aria-label={`Column name ${index + 1}`}
+          aria-describedby={suspect ? `suspect-${index}` : undefined}
+          onChange={(event) => rename(index, event.target.value)}
+        />
+        <button
+          type="button"
+          aria-label={`Remove ${label}`}
+          title={lastColumn ? "Keep at least one column" : `Remove ${label}`}
+          disabled={lastColumn}
+          className={cn(
+            "inline-flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground outline-none",
+            "opacity-0 hover:bg-muted hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring",
+            "group-hover/header:opacity-100 pointer-coarse:opacity-70",
+            suspect && !lastColumn && "opacity-100",
+            lastColumn && "opacity-40",
+          )}
+          onClick={() => remove(index)}
+        >
+          <X className="size-3" />
+        </button>
+      </div>
+      {suspect && (
+        <button
+          type="button"
+          id={`suspect-${index}`}
+          disabled={lastColumn}
+          className="w-fit text-left text-[11px] leading-tight text-amber-800 underline-offset-2 hover:underline disabled:no-underline disabled:opacity-60 dark:text-amber-400/90"
+          onClick={() => remove(index)}
+        >
+          {lastColumn ? `${suspect.reason} · keep one` : `${suspect.reason} — drop`}
+        </button>
+      )}
     </div>
   );
 }
@@ -86,17 +139,27 @@ function CellEditor({
   const label = names[index] || `Column ${index + 1}`;
   const source = original.find((item) => item.id === row.id)?.cells[index] ?? "";
   const dirty = key in edits && edits[key] !== source;
-  return (
-    <input
-      className={cn(
-        "h-6 w-full min-w-28 bg-transparent px-0.5 text-xs text-foreground outline-none",
-        dirty && editedMark,
-      )}
-      value={value}
-      aria-label={`${label}, row ${rowIndex + 1}`}
-      onChange={(event) => editCell(row.id, index, event.target.value)}
-    />
+  const money = isMoneyColumn(label);
+  const narrative = isNarrativeColumn(label);
+  const empty = value.trim() === "";
+  const fieldClass = cn(
+    "w-full bg-transparent px-0.5 text-foreground outline-none",
+    "focus-visible:bg-black/4 dark:focus-visible:bg-white/6",
+    narrative ? "ledger-narrative-input" : "h-8 text-[13px] leading-5",
+    money && "ledger-amount text-right tracking-tight",
+    money && empty && "text-current/35",
+    dirty && `rounded-sm ${editedMark}`,
   );
+  const fieldProps = {
+    className: fieldClass,
+    value,
+    "aria-label": `${label}, row ${rowIndex + 1}`,
+    onChange: (event: { target: { value: string } }) => editCell(row.id, index, event.target.value),
+  };
+  if (narrative) {
+    return <textarea rows={1} {...fieldProps} />;
+  }
+  return <input {...fieldProps} />;
 }
 
 interface ReviewStepProps {
@@ -110,6 +173,10 @@ interface ReviewStepProps {
   headingRef?: RefObject<HTMLHeadingElement | null>;
   onBack: () => void;
   onChangePdf: () => void;
+  canRemember?: boolean;
+  suggestedLayoutName?: string;
+  rememberPrompt?: string;
+  onRememberLayout?: (payload: { name: string; columns: string[] }) => void;
 }
 
 export function ReviewStep({
@@ -123,12 +190,22 @@ export function ReviewStep({
   headingRef,
   onBack,
   onChangePdf,
+  canRemember,
+  suggestedLayoutName = "",
+  rememberPrompt = "Remember this layout for the next statement?",
+  onRememberLayout,
 }: ReviewStepProps) {
   const [edits, setEdits] = useState<Record<string, string>>({});
   const [columnNames, setColumnNames] = useState<string[]>([]);
   const [removed, setRemoved] = useState<Set<number>>(new Set());
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
+  const [layoutName, setLayoutName] = useState(suggestedLayoutName);
+  const [rememberDismissed, setRememberDismissed] = useState(false);
+
+  useEffect(() => {
+    setLayoutName(suggestedLayoutName);
+  }, [suggestedLayoutName]);
 
   const extracted = useMemo(() => tablesToReview(tables), [tables]);
   const original = extracted.rows;
@@ -153,7 +230,21 @@ export function ReviewStep({
     () => correctionsFromEdits(original, names, edits, removed),
     [original, names, edits, removed],
   );
+  const suspects = useMemo(() => columnSuspects(names, rows), [names, rows]);
+  const dropped = useMemo(
+    () => [...removed].sort((a, b) => a - b),
+    [removed],
+  );
   const hasRows = rows.length > 0;
+  const growHeaderId = useMemo(() => {
+    const ids = visible.map((index) => `c${index}`);
+    return (
+      ids.find((id) => headerRole(id, names) === "narrative") ??
+      ids.find((id) => headerRole(id, names) === "plain") ??
+      ids[0] ??
+      ""
+    );
+  }, [visible, names]);
 
   const rename = useCallback((index: number, next: string) => {
     setColumnNames((current) => {
@@ -165,6 +256,14 @@ export function ReviewStep({
 
   const remove = useCallback((index: number) => {
     setRemoved((current) => new Set(current).add(index));
+  }, []);
+
+  const restore = useCallback((index: number) => {
+    setRemoved((current) => {
+      const next = new Set(current);
+      next.delete(index);
+      return next;
+    });
   }, []);
 
   const editCell = useCallback(
@@ -185,8 +284,8 @@ export function ReviewStep({
     () =>
       helper.columns([
         helper.accessor("page", {
-          header: "Page",
-          cell: (info) => info.getValue(),
+          header: () => <span className="ledger-folio-label">Page</span>,
+          cell: (info) => <span className="ledger-folio">{info.getValue()}</span>,
         }),
         ...visible.map((index) =>
           helper.accessor((row) => row.cells[index] ?? "", {
@@ -244,13 +343,15 @@ export function ReviewStep({
     : hasRows
       ? `${rows.length} rows · ${boxSummary}${
           corrections.length ? ` · ${corrections.length} corrected` : ""
-        }${removed.size ? ` · ${removed.size} column${removed.size === 1 ? "" : "s"} removed` : ""}`
+        }`
       : `No rows · ${boxSummary}`;
   const exportHint = hasRows
     ? undefined
     : loading
       ? "Wait for rows before export."
       : "Adjust the boxes, then export.";
+  const showHelper = hasRows && dropped.length === 0 && suspects.length === 0;
+  const showRemember = Boolean(canRemember && onRememberLayout && hasRows && !rememberDismissed);
 
   const editValue: ReviewEditContextValue = {
     names,
@@ -258,6 +359,7 @@ export function ReviewStep({
     edits,
     original,
     visibleCount: visible.length,
+    suspects,
     rename,
     remove,
     editCell,
@@ -304,13 +406,58 @@ export function ReviewStep({
             </Button>
           </div>
         </div>
-        {hasRows && (
-          <p className="max-w-xl border-b bg-card px-2.5 py-1.5 text-xs text-muted-foreground">
-            Rename or drop a column. Amber is yours. Excel includes a Corrections sheet.
-          </p>
+        {showRemember && (
+          <form
+            className="flex flex-wrap items-center gap-2 border-b bg-card px-2.5 py-1.5"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const next = layoutName.trim();
+              if (!next) return;
+              onRememberLayout?.({
+                name: next,
+                columns: projectReview(names, rows, removed).columns,
+              });
+              setRememberDismissed(true);
+            }}
+          >
+            <p className="text-xs text-muted-foreground">{rememberPrompt}</p>
+            <Input
+              id="remember-layout-name"
+              size="sm"
+              className="w-44"
+              value={layoutName}
+              aria-label="Layout name"
+              onChange={(event) => setLayoutName(event.target.value)}
+            />
+            <Button size="xs" type="submit">
+              Remember
+            </Button>
+            <Button size="xs" variant="ghost" type="button" onClick={() => setRememberDismissed(true)}>
+              Not now
+            </Button>
+          </form>
         )}
-        <div className="min-h-0 flex-1 overflow-auto p-2">
-          <div aria-live="polite">
+        {dropped.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5 border-b bg-card px-2.5 py-1.5">
+            <p className="text-xs text-muted-foreground">Dropped</p>
+            {dropped.map((index) => {
+              const label = names[index] || sourceNames[index] || `Column ${index + 1}`;
+              return (
+                <button
+                  key={index}
+                  type="button"
+                  className="rounded-md border px-2 py-0.5 text-xs text-foreground outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
+                  onClick={() => restore(index)}
+                >
+                  {label}
+                  <span className="text-muted-foreground"> · Restore</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+        <div className="min-h-0 flex-1 overflow-auto">
+          <div aria-live="polite" className="px-4 pt-3 empty:hidden">
             {error && <p className="mb-2 text-sm text-destructive">{error}</p>}
             {loading && <p className="text-sm text-muted-foreground">Reading the selected tables…</p>}
             {!loading && !canExtract && (
@@ -326,30 +473,57 @@ export function ReviewStep({
             )}
           </div>
           {hasRows && (
-            <Table>
-              <TableHeader>
-                {table.getHeaderGroups().map((group) => (
-                  <TableRow key={group.id}>
-                    {group.headers.map((header) => (
-                      <TableHead key={header.id} className="h-8 whitespace-nowrap px-1.5">
-                        {header.isPlaceholder ? null : <table.FlexRender header={header} />}
-                      </TableHead>
-                    ))}
-                  </TableRow>
-                ))}
-              </TableHeader>
-              <TableBody>
-                {table.getRowModel().rows.map((row) => (
-                  <TableRow key={row.id}>
-                    {row.getAllCells().map((cell) => (
-                      <TableCell key={cell.id} className="p-1 align-top whitespace-normal">
-                        <table.FlexRender cell={cell} />
-                      </TableCell>
-                    ))}
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+            <div className="ledger-sheet">
+              {showHelper && (
+                <p className="ledger-caption">Type a header to rename it. Amber is yours.</p>
+              )}
+              <Table className="ledger" containerClassName="overflow-visible">
+                <TableHeader>
+                  {table.getHeaderGroups().map((group) => (
+                    <TableRow key={group.id} className="border-0 hover:bg-transparent">
+                      {group.headers.map((header) => {
+                        const role = headerRole(header.id, names);
+                        const grow = header.id === growHeaderId;
+                        return (
+                          <TableHead
+                            key={header.id}
+                            className={cn(
+                              "h-auto min-w-0 px-2.5 py-2 align-bottom whitespace-normal text-foreground",
+                              roleClass(role, grow),
+                              role === "money" && "text-right",
+                            )}
+                          >
+                            {header.isPlaceholder ? null : <table.FlexRender header={header} />}
+                          </TableHead>
+                        );
+                      })}
+                    </TableRow>
+                  ))}
+                </TableHeader>
+                <TableBody>
+                  {table.getRowModel().rows.map((row) => (
+                    <TableRow key={row.id} className="border-0 hover:bg-transparent">
+                      {row.getAllCells().map((cell) => {
+                        const role = headerRole(cell.column.id, names);
+                        const grow = cell.column.id === growHeaderId;
+                        return (
+                          <TableCell
+                            key={cell.id}
+                            className={cn(
+                              "min-w-0 px-2.5 py-2 align-top leading-normal whitespace-normal",
+                              roleClass(role, grow),
+                              role === "money" && "text-right",
+                            )}
+                          >
+                            <table.FlexRender cell={cell} />
+                          </TableCell>
+                        );
+                      })}
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
           )}
           {saveError && <p className="mt-2 text-sm text-destructive">{saveError}</p>}
         </div>
