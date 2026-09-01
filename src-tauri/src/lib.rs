@@ -368,6 +368,46 @@ fn get_app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
+fn parse_hex_rgb(hex: &str) -> Result<(u8, u8, u8), String> {
+    let hex = hex.trim().trim_start_matches('#');
+    if hex.len() != 6 {
+        return Err(format!("expected #RRGGBB, got {hex}"));
+    }
+    let r = u8::from_str_radix(&hex[0..2], 16).map_err(|e| e.to_string())?;
+    let g = u8::from_str_radix(&hex[2..4], 16).map_err(|e| e.to_string())?;
+    let b = u8::from_str_radix(&hex[4..6], 16).map_err(|e| e.to_string())?;
+    Ok((r, g, b))
+}
+
+#[cfg(target_os = "macos")]
+fn set_macos_window_background(window: &tauri::WebviewWindow, r: u8, g: u8, b: u8) -> Result<(), String> {
+    use objc2_app_kit::{NSColor, NSTitlebarSeparatorStyle, NSWindow};
+
+    let ns_window_ptr = window.ns_window().map_err(|e| e.to_string())? as *mut NSWindow;
+    let ns_window = unsafe { &*ns_window_ptr };
+    let bg_color = NSColor::colorWithRed_green_blue_alpha(
+        r as f64 / 255.0,
+        g as f64 / 255.0,
+        b as f64 / 255.0,
+        1.0,
+    );
+    ns_window.setTitlebarAppearsTransparent(true);
+    ns_window.setTitlebarSeparatorStyle(NSTitlebarSeparatorStyle::None);
+    ns_window.setOpaque(true);
+    ns_window.setBackgroundColor(Some(&bg_color));
+    Ok(())
+}
+
+/// Paints the native window (and macOS overlay title bar) the same color as the web UI.
+#[tauri::command]
+fn set_native_background(window: tauri::WebviewWindow, hex: String) -> Result<(), String> {
+    let (r, g, b) = parse_hex_rgb(&hex)?;
+    let _ = window.set_background_color(Some(tauri::window::Color(r, g, b, 255)));
+    #[cfg(target_os = "macos")]
+    set_macos_window_background(&window, r, g, b)?;
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -375,12 +415,15 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             extract_tables,
             guess_tables,
             cancel_extraction,
             save_file,
-            get_app_version
+            get_app_version,
+            set_native_background
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

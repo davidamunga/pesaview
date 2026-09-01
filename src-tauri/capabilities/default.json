@@ -5,8 +5,14 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-set-background-color",
     "opener:default",
     "dialog:default",
+    "updater:default",
+    "updater:allow-check",
+    "process:default",
+    "process:allow-restart",
     "fs:default",
     "fs:allow-read-file",
     "fs:allow-read-text-file",
@@ -30,6 +36,10 @@
     {
       "identifier": "opener:allow-open-path",
       "allow": [{ "path": "**" }]
+    },
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "https://github.com/**" }]
     }
   ]
 }

@@ -1,0 +1,178 @@
+name: Check PR
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+      - edited
+
+permissions:
+  contents: read
+  pull-requests: write
+  id-token: write
+  actions: read
+  statuses: write
+
+concurrency:
+  group: pr-check-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  skip-draft:
+    name: Skip Draft PR
+    if: ${{ github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Skip draft PR
+        run: echo "Skipping checks for draft PR #${{ github.event.pull_request.number }}"
+
+  pr-title:
+    name: Check PR Title
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate PR title format
+        uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            feat
+            fix
+            docs
+            style
+            refactor
+            perf
+            test
+            build
+            ci
+            chore
+            revert
+          requireScope: false
+          subjectPattern: ^(?![A-Z]).+$
+          subjectPatternError: |
+            The subject "{subject}" found in the pull request title "{title}"
+            didn't match the configured pattern. Please ensure that the subject
+            doesn't start with an uppercase character.
+
+  test-and-build:
+    name: Test and Build
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - test_type: "frontend"
+            description: "Frontend tests, type check, and build"
+          - test_type: "tauri"
+            description: "Tauri configuration validation"
+          - test_type: "security"
+            description: "Security audit"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Install Rust stable
+        if: matrix.test_type == 'tauri'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install system dependencies
+        if: matrix.test_type == 'tauri'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf curl wget unzip
+
+      - name: Get pnpm store directory
+        id: pnpm-cache
+        shell: bash
+        run: |
+          echo "STORE_PATH=$(pnpm store path)" >> $GITHUB_OUTPUT
+
+      - name: Cache pnpm dependencies
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
+
+      - name: Cache Rust dependencies
+        if: matrix.test_type == 'tauri'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Cache JRE for Tabula
+        if: matrix.test_type == 'tauri'
+        uses: actions/cache@v4
+        with:
+          path: |
+            src-tauri/resources/build-jre
+          key: ${{ runner.os }}-jre-v7-17.0.13-${{ hashFiles('src-tauri/scripts/setup-build-jre.sh') }}
+          restore-keys: |
+            ${{ runner.os }}-jre-v7-17.0.13-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Frontend tests
+        if: matrix.test_type == 'frontend'
+        run: pnpm test
+
+      - name: Frontend type check and build
+        if: matrix.test_type == 'frontend' || matrix.test_type == 'tauri'
+        run: pnpm run build
+
+      - name: Setup JRE for Tabula
+        if: matrix.test_type == 'tauri'
+        shell: bash
+        run: bash src-tauri/scripts/setup-build-jre.sh
+
+      - name: Check Tauri configuration
+        if: matrix.test_type == 'tauri'
+        run: |
+          if ! node -e "JSON.parse(require('fs').readFileSync('src-tauri/tauri.conf.json', 'utf8'))"; then
+            echo "Invalid tauri.conf.json"
+            exit 1
+          fi
+
+          cd src-tauri
+          if ! cargo check --quiet; then
+            echo "Cargo check failed"
+            exit 1
+          fi
+
+      - name: Security audit
+        if: matrix.test_type == 'security'
+        run: |
+          AUDIT_EXIT=0
+          AUDIT_OUT=$(pnpm audit --audit-level moderate 2>&1) || AUDIT_EXIT=$?
+          echo "$AUDIT_OUT"
+          if [ $AUDIT_EXIT -ne 0 ]; then
+            if echo "$AUDIT_OUT" | grep -qE "410|ERR_PNPM_AUDIT_BAD_RESPONSE|endpoint is being retired"; then
+              echo "npm audit endpoint unavailable. Skipping."
+            else
+              echo "Security vulnerabilities found. Run 'pnpm audit --fix' where possible."
+              exit 1
+            fi
+          fi

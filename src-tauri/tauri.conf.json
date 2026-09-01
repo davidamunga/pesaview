@@ -14,6 +14,8 @@
       {
         "title": "PesaView",
         "hiddenTitle": true,
+        "titleBarStyle": "Overlay",
+        "backgroundColor": "#efeee9",
         "width": 960,
         "height": 680,
         "minWidth": 800,
@@ -23,10 +25,11 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' blob:; worker-src 'self' blob:"
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' blob: https://api.github.com https://github.com; worker-src 'self' blob:"
     }
   },
   "bundle": {
+    "createUpdaterArtifacts": true,
     "active": true,
     "targets": "all",
     "icon": [
@@ -43,6 +46,23 @@
     "publisher": "David Amunga",
     "category": "Utility",
     "shortDescription": "Extract tables from bank and M-PESA statement PDFs",
-    "longDescription": "A desktop app that previews statement PDFs, lets you select or autodetect table regions, and exports the extracted data to CSV or Excel. Processing stays on your device."
+    "longDescription": "A desktop app that previews statement PDFs, lets you select or autodetect table regions, and exports the extracted data to CSV or Excel. Processing stays on your device.",
+    "macOS": {
+      "minimumSystemVersion": "10.13",
+      "entitlements": "entitlements.plist"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "active": true,
+      "windows": {
+        "installMode": "passive"
+      },
+      "endpoints": [
+        "https://github.com/davidamunga/pesaview/releases/latest/download/latest.json"
+      ],
+      "dialog": true,
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQ0OUIxNEU2Qzc4RTkwNEEKUldSS2tJN0g1aFNiMUZJMHZ1M1NoN3BpdHAxMlZXeXE2YmhuaTdGVnNrZWw1ckozNHRRdEdHRHkK"
+    }
   }
 }

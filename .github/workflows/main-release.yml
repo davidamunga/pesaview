@@ -1,0 +1,1126 @@
+name: "Main Release"
+
+on:
+  workflow_dispatch:
+    inputs:
+      skip_validation:
+        description: "Skip pre-release validation (not recommended)"
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: main-release
+  cancel-in-progress: false
+
+jobs:
+  # Step 1: Get version information
+  check-release:
+    name: "Get Release Info"
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: Get version
+        id: version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          TAG="v$VERSION"
+
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+          echo "📦 Preparing release for version: $VERSION"
+          echo "🏷️  Tag: $TAG"
+
+          # Check if tag already exists
+          if git ls-remote --tags origin | grep -q "refs/tags/$TAG$"; then
+            echo "⚠️  Warning: Tag $TAG already exists"
+            echo "   This release will update the existing release"
+          fi
+
+  # Step 2: Pre-release validation
+  pre-release-validation:
+    name: "Pre-Release Validation"
+    runs-on: ubuntu-latest
+    needs: check-release
+    if: github.event.inputs.skip_validation != 'true'
+    outputs:
+      validation_passed: ${{ steps.validate.outputs.passed }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install system dependencies for validation
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libglib2.0-dev curl wget unzip
+
+      - name: Run comprehensive validation
+        id: validate
+        run: |
+          VALIDATION_PASSED="true"
+          VALIDATION_ERRORS=""
+
+          AUDIT_EXIT=0
+          AUDIT_OUT=$(pnpm audit --audit-level moderate 2>&1) || AUDIT_EXIT=$?
+          if [ $AUDIT_EXIT -ne 0 ]; then
+            if echo "$AUDIT_OUT" | grep -qE "410|ERR_PNPM_AUDIT_BAD_RESPONSE|endpoint is being retired"; then
+              echo "⚠️ npm audit endpoint unavailable (retired July 2026). Skipping security check."
+            else
+              VALIDATION_ERRORS="${VALIDATION_ERRORS}Security vulnerabilities found. "
+              VALIDATION_PASSED="false"
+            fi
+          fi
+
+          VERSION=$(node -p "require('./package.json').version")
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            VALIDATION_ERRORS="${VALIDATION_ERRORS}Invalid version format: $VERSION. "
+            VALIDATION_PASSED="false"
+          fi
+
+          if ! git diff --quiet; then
+            VALIDATION_ERRORS="${VALIDATION_ERRORS}Uncommitted changes detected. "
+            VALIDATION_PASSED="false"
+          fi
+
+          if ! node -e "JSON.parse(require('fs').readFileSync('src-tauri/tauri.conf.json', 'utf8'))"; then
+            VALIDATION_ERRORS="${VALIDATION_ERRORS}Invalid tauri.conf.json. "
+            VALIDATION_PASSED="false"
+          fi
+
+          if ! pnpm run build; then
+            VALIDATION_ERRORS="${VALIDATION_ERRORS}Frontend build failed. "
+            VALIDATION_PASSED="false"
+          fi
+
+          if ! bash src-tauri/scripts/setup-build-jre.sh; then
+            VALIDATION_ERRORS="${VALIDATION_ERRORS}JRE setup failed. "
+            VALIDATION_PASSED="false"
+          fi
+
+          cd src-tauri
+          if ! cargo check --quiet; then
+            VALIDATION_ERRORS="${VALIDATION_ERRORS}Cargo check failed. "
+            VALIDATION_PASSED="false"
+          fi
+          cd ..
+
+          if [[ "$VALIDATION_PASSED" == "true" ]]; then
+            echo "✅ Validation passed"
+          else
+            echo "❌ Validation failed: $VALIDATION_ERRORS"
+          fi
+
+          echo "passed=$VALIDATION_PASSED" >> $GITHUB_OUTPUT
+
+  # Step 3: Sync versions and create tag
+  prepare-release:
+    name: "Prepare Release"
+    runs-on: ubuntu-latest
+    needs: [check-release, pre-release-validation]
+    if: always() && needs.check-release.result == 'success' && (needs.pre-release-validation.result == 'success' || needs.pre-release-validation.result == 'skipped')
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ needs.check-release.outputs.version }}
+      tag: ${{ needs.check-release.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Sync versions
+        run: |
+          pnpm run sync-versions
+
+          if ! git diff --quiet; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add .
+            git commit -m "chore: sync version files"
+            git push
+          fi
+
+      - name: Create or update tag
+        run: |
+          VERSION="${{ needs.check-release.outputs.version }}"
+          TAG="${{ needs.check-release.outputs.tag }}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Clean up any existing draft releases
+          RELEASE_ID=$(gh release view "$TAG" --json id,isDraft --jq 'select(.isDraft == true) | .id' 2>/dev/null || echo "")
+          if [ -n "$RELEASE_ID" ]; then
+            echo "🗑️  Cleaning up draft release for $TAG"
+            gh release delete "$TAG" --yes 2>/dev/null || true
+          fi
+
+          # Create tag if needed
+          if ! git tag -l "$TAG" | grep -q "$TAG"; then
+            if git ls-remote --tags origin | grep -q "refs/tags/$TAG$"; then
+              echo "⬇️  Fetching existing tag $TAG"
+              git fetch origin "refs/tags/$TAG:refs/tags/$TAG"
+            else
+              echo "🏷️  Creating new tag $TAG"
+              git tag -a "$TAG" -m "Release $TAG"
+              git push origin "$TAG"
+            fi
+          else
+            echo "✅ Tag $TAG already exists locally"
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Step 4: Build and release desktop
+  build-and-release:
+    name: "Build & Release"
+    needs: [check-release, pre-release-validation, prepare-release]
+    if: always() && needs.check-release.result == 'success' && needs.prepare-release.result == 'success' && (needs.pre-release-validation.result == 'success' || needs.pre-release-validation.result == 'skipped')
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: "macos-latest"
+            args: "--target aarch64-apple-darwin"
+            target: "aarch64-apple-darwin"
+            build_name: "macos-aarch64"
+          - platform: "macos-latest"
+            args: "--target x86_64-apple-darwin"
+            target: "x86_64-apple-darwin"
+            build_name: "macos-x64"
+          - platform: "ubuntu-22.04"
+            args: "--target x86_64-unknown-linux-gnu"
+            target: "x86_64-unknown-linux-gnu"
+            build_name: "linux-x64"
+          - platform: "windows-latest"
+            args: "--target x86_64-pc-windows-msvc"
+            target: "x86_64-pc-windows-msvc"
+            build_name: "windows-x64"
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare-release.outputs.tag }}
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install system dependencies (Ubuntu)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            curl \
+            wget \
+            unzip \
+            libfuse2 \
+            file \
+            libglib2.0-dev
+
+          # Configure AppImage environment for CI
+          # AppImages need FUSE but GitHub Actions doesn't have it by default
+          # We'll extract the AppImage instead of running it with FUSE
+          echo "APPIMAGE_EXTRACT_AND_RUN=1" >> $GITHUB_ENV
+
+      - name: Install create-dmg (macOS)
+        if: matrix.platform == 'macos-latest'
+        run: |
+          brew install create-dmg
+
+      - name: Import Apple Code Signing Certificate
+        if: matrix.platform == 'macos-latest'
+        run: |
+          # Create keychain
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security set-keychain-settings -t 3600 -u build.keychain
+
+          # Import certificate
+          echo "$APPLE_CERTIFICATE" | base64 --decode > certificate.p12
+          security import certificate.p12 -k build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" build.keychain
+
+          # Clean up
+          rm certificate.p12
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+
+      - name: Get pnpm store directory
+        id: pnpm-cache
+        shell: bash
+        run: |
+          echo "STORE_PATH=$(pnpm store path)" >> $GITHUB_OUTPUT
+
+      - name: Cache pnpm dependencies
+        if: matrix.platform != 'windows-latest'
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
+
+      - name: Cache Rust dependencies
+        if: matrix.platform != 'windows-latest'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-cargo-
+            ${{ runner.os }}-cargo-
+      - name: Cache JRE for Tabula
+        uses: actions/cache@v4
+        with:
+          path: |
+            src-tauri/resources/build-jre
+          key: ${{ runner.os }}-${{ matrix.target }}-jre-v7-17.0.13-${{ hashFiles('src-tauri/scripts/setup-build-jre.sh') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-jre-v7-17.0.13-
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Setup JRE for Tabula
+        shell: bash
+        run: |
+          # For macOS, specify the target architecture explicitly
+          if [[ "${{ matrix.platform }}" == "macos-latest" ]]; then
+            if [[ "${{ matrix.target }}" == "aarch64-apple-darwin" ]]; then
+              echo "📦 Setting up ARM64 JRE for Apple Silicon build..."
+              TARGET_PLATFORM=jre-macos-arm64 bash src-tauri/scripts/setup-build-jre.sh
+            elif [[ "${{ matrix.target }}" == "x86_64-apple-darwin" ]]; then
+              echo "📦 Setting up x64 JRE for Intel build..."
+              TARGET_PLATFORM=jre-macos-x64 bash src-tauri/scripts/setup-build-jre.sh
+            fi
+          else
+            # For other platforms, use default detection
+            # The script will automatically configure Linux JRE for AppImage bundling
+            bash src-tauri/scripts/setup-build-jre.sh
+          fi
+
+      - name: Verify JRE Setup
+        shell: bash
+        run: |
+          echo "🔍 Verifying JRE setup..."
+
+          if [[ "${{ matrix.platform }}" == "windows-latest" ]]; then
+            JRE_DIR="src-tauri/resources/build-jre/jre-windows-x64"
+            JAVA_EXE="$JRE_DIR/bin/java.exe"
+          elif [[ "${{ matrix.platform }}" == "ubuntu-22.04" ]]; then
+            JRE_DIR="src-tauri/resources/build-jre/jre-linux-x64"
+            JAVA_EXE="$JRE_DIR/bin/java"
+          elif [[ "${{ matrix.platform }}" == "macos-latest" ]]; then
+            # Check only the JRE for the architecture we're building
+            if [[ "${{ matrix.target }}" == "aarch64-apple-darwin" ]]; then
+              JRE_DIR="src-tauri/resources/build-jre/jre-macos-arm64"
+            else
+              JRE_DIR="src-tauri/resources/build-jre/jre-macos-x64"
+            fi
+            JAVA_EXE="$JRE_DIR/bin/java"
+          fi
+
+          echo "Checking JRE directory: $JRE_DIR"
+          if [ -d "$JRE_DIR" ]; then
+            echo "✅ JRE directory exists"
+            echo "   Size: $(du -sh "$JRE_DIR" | cut -f1)"
+            echo ""
+            
+            # Check for bin directory (both standard and macOS structure)
+            if [ -d "$JRE_DIR/bin" ]; then
+              echo "✅ bin directory exists (standard structure)"
+              echo "   Contents of bin directory (first 10 files):"
+              ls -lh "$JRE_DIR/bin" | head -10
+            elif [ -d "$JRE_DIR/Contents/Home/bin" ]; then
+              echo "✅ bin directory exists (macOS structure: Contents/Home/bin)"
+              echo "   Contents of bin directory (first 10 files):"
+              ls -lh "$JRE_DIR/Contents/Home/bin" | head -10
+            else
+              echo "❌ bin directory NOT found in standard or macOS structure"
+              echo "   Contents of JRE directory:"
+              ls -lh "$JRE_DIR"
+              if [ -d "$JRE_DIR/Contents" ]; then
+                echo "   Contents/:"
+                ls -lh "$JRE_DIR/Contents"
+              fi
+            fi
+            echo ""
+            
+            # Try both possible Java executable locations for macOS
+            ACTUAL_JAVA_EXE="$JAVA_EXE"
+            if [[ "${{ matrix.platform }}" == "macos-latest" ]] && [ ! -f "$JAVA_EXE" ]; then
+              # Try macOS structure
+              if [[ "${{ matrix.target }}" == "aarch64-apple-darwin" ]]; then
+                ACTUAL_JAVA_EXE="src-tauri/resources/build-jre/jre-macos-arm64/Contents/Home/bin/java"
+              else
+                ACTUAL_JAVA_EXE="src-tauri/resources/build-jre/jre-macos-x64/Contents/Home/bin/java"
+              fi
+            fi
+            
+            if [ -f "$ACTUAL_JAVA_EXE" ]; then
+              echo "✅ Java executable exists at: $ACTUAL_JAVA_EXE"
+              
+              # Verify architecture on macOS and Linux
+              if command -v file >/dev/null 2>&1; then
+                JAVA_ARCH=$(file "$ACTUAL_JAVA_EXE")
+                echo "   Binary architecture: $JAVA_ARCH"
+                
+                # Check if architecture matches target
+                if [[ "${{ matrix.platform }}" == "macos-latest" ]]; then
+                  if [[ "${{ matrix.target }}" == "x86_64-apple-darwin" ]]; then
+                    if echo "$JAVA_ARCH" | grep -q "x86_64\|x86-64"; then
+                      echo "   ✅ Correct architecture: x86_64 (Intel)"
+                    else
+                      echo "   ❌ WRONG ARCHITECTURE! Expected x86_64, found:"
+                      echo "   $JAVA_ARCH"
+                      echo "   This will cause 'Bad CPU type' errors!"
+                      exit 1
+                    fi
+                  elif [[ "${{ matrix.target }}" == "aarch64-apple-darwin" ]]; then
+                    if echo "$JAVA_ARCH" | grep -q "arm64\|aarch64"; then
+                      echo "   ✅ Correct architecture: ARM64 (Apple Silicon)"
+                    else
+                      echo "   ❌ WRONG ARCHITECTURE! Expected ARM64"
+                      exit 1
+                    fi
+                  fi
+                fi
+              fi
+              
+              echo ""
+              echo "   Testing Java execution:"
+              "$ACTUAL_JAVA_EXE" -version 2>&1 || {
+                echo "❌ Java execution failed!"
+                exit 1
+              }
+            else
+              echo "❌ Java executable NOT found at: $JAVA_EXE or $ACTUAL_JAVA_EXE"
+              exit 1
+            fi
+          else
+            echo "❌ JRE directory NOT found: $JRE_DIR"
+            echo ""
+            echo "Contents of build-jre:"
+            ls -lh src-tauri/resources/build-jre/ || echo "build-jre directory doesn't exist"
+            exit 1
+          fi
+
+      - name: Setup AppImage build tools (Ubuntu)
+        if: matrix.platform == 'ubuntu-22.04'
+        shell: bash
+        run: |
+          echo "🔧 Setting up AppImage build tools for CI environment..."
+
+          # Create tools directory
+          mkdir -p ~/.local/bin
+          export PATH="$HOME/.local/bin:$PATH"
+
+          # Pre-download and extract linuxdeploy (so it doesn't need FUSE)
+          echo "⬇️  Downloading linuxdeploy..."
+          cd ~/.local/bin
+
+          # Download linuxdeploy
+          wget -q https://github.com/tauri-apps/binary-releases/releases/download/linuxdeploy/linuxdeploy-x86_64.AppImage
+          chmod +x linuxdeploy-x86_64.AppImage
+
+          # Extract it so it doesn't need FUSE
+          ./linuxdeploy-x86_64.AppImage --appimage-extract >/dev/null 2>&1 || true
+          if [ -d "squashfs-root" ]; then
+            mv squashfs-root linuxdeploy-extracted
+            # Create a wrapper script
+            cat > linuxdeploy-x86_64.AppImage << 'EOF'
+          #!/bin/bash
+          DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+          exec "$DIR/linuxdeploy-extracted/AppRun" "$@"
+          EOF
+            chmod +x linuxdeploy-x86_64.AppImage
+            echo "✅ linuxdeploy extracted and ready"
+          fi
+
+          # Download linuxdeploy-plugin-appimage
+          echo "⬇️  Downloading linuxdeploy-plugin-appimage..."
+          wget -q https://github.com/linuxdeploy/linuxdeploy-plugin-appimage/releases/download/continuous/linuxdeploy-plugin-appimage-x86_64.AppImage
+          chmod +x linuxdeploy-plugin-appimage-x86_64.AppImage
+
+          # Extract it
+          ./linuxdeploy-plugin-appimage-x86_64.AppImage --appimage-extract >/dev/null 2>&1 || true
+          if [ -d "squashfs-root" ]; then
+            mv squashfs-root linuxdeploy-plugin-appimage-extracted
+            # Create a wrapper script
+            cat > linuxdeploy-plugin-appimage-x86_64.AppImage << 'EOF'
+          #!/bin/bash
+          DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+          export APPIMAGE_EXTRACT_AND_RUN=1
+          exec "$DIR/linuxdeploy-plugin-appimage-extracted/AppRun" "$@"
+          EOF
+            chmod +x linuxdeploy-plugin-appimage-x86_64.AppImage
+            echo "✅ linuxdeploy-plugin-appimage extracted and ready"
+          fi
+
+          # Download GTK and GStreamer plugins (these are shell scripts, not AppImages)
+          echo "⬇️  Downloading GTK plugin..."
+          wget -q https://raw.githubusercontent.com/tauri-apps/linuxdeploy-plugin-gtk/master/linuxdeploy-plugin-gtk.sh
+          chmod +x linuxdeploy-plugin-gtk.sh
+
+          echo "⬇️  Downloading GStreamer plugin..."
+          wget -q https://raw.githubusercontent.com/tauri-apps/linuxdeploy-plugin-gstreamer/master/linuxdeploy-plugin-gstreamer.sh
+          chmod +x linuxdeploy-plugin-gstreamer.sh
+
+          echo "✅ All plugins downloaded"
+
+          # Add to PATH for the rest of the workflow
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+          # Return to workspace
+          cd "$GITHUB_WORKSPACE"
+
+          # Verify JRE is set up
+          echo ""
+          echo "🔍 Verifying build environment..."
+          if [ -d "src-tauri/resources/build-jre" ]; then
+            echo "✅ JRE directory exists"
+            echo "JRE size: $(du -sh src-tauri/resources/build-jre | cut -f1)"
+          else
+            echo "⚠️ JRE directory not found"
+          fi
+
+          # List what's in PATH
+          echo ""
+          echo "Tools in ~/.local/bin:"
+          ls -lh ~/.local/bin/ | grep -E "linuxdeploy|AppImage" || echo "No tools found"
+
+          echo "✅ AppImage build tools setup complete"
+
+      - name: Extract changelog for release
+        id: changelog
+        shell: bash
+        continue-on-error: false
+        run: |
+          set +e
+          VERSION="${{ needs.prepare-release.outputs.version }}"
+
+          if [ -f "CHANGELOG.md" ]; then
+            # Extract this version's section; drop Changesets category headings
+            # so GitHub release notes read as a clean bullet list.
+            CHANGELOG_CONTENT=$(awk -v version="$VERSION" '
+              /^## / {
+                if (found) exit
+                if ($0 ~ "## .*" version) found=1
+                next
+              }
+              found && /^## / { exit }
+              found && /^### / { next }
+              found { print }
+            ' CHANGELOG.md | sed '/^[[:space:]]*$/d')
+
+            PREVIOUS_VERSION=$(awk '/^## / && !/'"$VERSION"'/ { print $2; exit }' CHANGELOG.md)
+
+            if [ -n "$CHANGELOG_CONTENT" ]; then
+              HAS_BREAKING="false"
+              if echo "$CHANGELOG_CONTENT" | grep -qiE 'breaking change|BREAKING'; then
+                HAS_BREAKING="true"
+              fi
+
+              FORMATTED_CHANGELOG=$(printf '%s' "$CHANGELOG_CONTENT" | LC_ALL=C tr -d '\000-\011\013-\037\177' | sed 's/\\/\\\\/g' | sed 's/"/\\"/g')
+
+              echo "changelog<<EOF" >> $GITHUB_OUTPUT
+              printf '%s\n' "$FORMATTED_CHANGELOG" >> $GITHUB_OUTPUT
+              echo "EOF" >> $GITHUB_OUTPUT
+              echo "has_breaking=$HAS_BREAKING" >> $GITHUB_OUTPUT
+            else
+              echo "changelog=See CHANGELOG.md for details." >> $GITHUB_OUTPUT
+              echo "has_breaking=false" >> $GITHUB_OUTPUT
+            fi
+            echo "previous_version=$PREVIOUS_VERSION" >> $GITHUB_OUTPUT
+          else
+            echo "changelog=No changelog available." >> $GITHUB_OUTPUT
+            echo "previous_version=0.0.0" >> $GITHUB_OUTPUT
+            echo "has_breaking=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Generate build timestamp
+        id: timestamp
+        run: echo "build_time=$(date -u +"%Y-%m-%d %H:%M UTC")" >> $GITHUB_OUTPUT
+
+      - name: Re-sign JRE dylibs for macOS notarization
+        if: matrix.platform == 'macos-latest'
+        shell: bash
+        run: |
+          if [[ "${{ matrix.target }}" == "aarch64-apple-darwin" ]]; then
+            JRE_DIR="src-tauri/resources/build-jre/jre-macos-arm64"
+          else
+            JRE_DIR="src-tauri/resources/build-jre/jre-macos-x64"
+          fi
+
+          if [ ! -d "$JRE_DIR" ]; then
+            echo "❌ JRE directory not found: $JRE_DIR"
+            exit 1
+          fi
+
+          echo "🔏 Re-signing JRE dylibs with Developer ID certificate..."
+
+          # Remove quarantine and extended attributes that can interfere with signing
+          xattr -cr "$JRE_DIR" 2>/dev/null || true
+
+          SIGNED=0
+          FAILED=0
+          # Sign only regular files (not symlinks) to avoid double-signing through symlink targets
+          while IFS= read -r -d '' dylib; do
+            if codesign --force \
+                --sign "$APPLE_SIGNING_IDENTITY" \
+                --keychain build.keychain \
+                --options runtime \
+                --timestamp \
+                "$dylib" 2>/dev/null; then
+              SIGNED=$((SIGNED + 1))
+            else
+              echo "  ⚠️  Failed to re-sign: $dylib"
+              FAILED=$((FAILED + 1))
+            fi
+          done < <(find "$JRE_DIR" -type f \( -name "*.dylib" -o -name "*.jnilib" \) -print0)
+
+          echo "✅ Re-signing complete: $SIGNED signed, $FAILED failed"
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+
+      - name: Build Tauri app
+        id: tauri-build
+        continue-on-error: true
+        shell: bash
+        run: |
+          echo "🔨 Building Tauri app for ${{ matrix.build_name }}..."
+
+          # Clean previous build artifacts to avoid version conflicts
+          echo "🧹 Cleaning previous build artifacts..."
+          rm -rf dist src-tauri/target/release/bundle
+          echo "✅ Build directory cleaned"
+
+          # Configure LD_LIBRARY_PATH for Linux to help linuxdeploy find JRE libraries
+          if [[ "${{ matrix.platform }}" == "ubuntu-22.04" ]]; then
+            JRE_DIRS=$(find src-tauri/resources/build-jre -type d -name "lib" 2>/dev/null || echo "")
+            if [ -n "$JRE_DIRS" ]; then
+              for JRE_LIB in $JRE_DIRS; do
+                if [ -d "$JRE_LIB/server" ]; then
+                  export LD_LIBRARY_PATH="$PWD/$JRE_LIB/server:${LD_LIBRARY_PATH}"
+                fi
+                export LD_LIBRARY_PATH="$PWD/$JRE_LIB:${LD_LIBRARY_PATH}"
+              done
+            fi
+          fi
+
+          # Build with retry logic
+          set +e
+          pnpm tauri build ${{ matrix.args }} --verbose
+          BUILD_EXIT_CODE=$?
+          set -e
+
+          if [[ $BUILD_EXIT_CODE -ne 0 ]]; then
+            echo "❌ First build attempt failed (exit code: $BUILD_EXIT_CODE)"
+            echo "🔄 Attempting clean build..."
+            
+            # Clean and retry
+            rm -rf dist src-tauri/target/release
+            pnpm tauri build ${{ matrix.args }} --verbose
+            BUILD_EXIT_CODE=$?
+            
+            if [[ $BUILD_EXIT_CODE -ne 0 ]]; then
+              echo "❌ Build failed after retry (exit code: $BUILD_EXIT_CODE)"
+              echo "build_success=false" >> $GITHUB_OUTPUT
+              exit 1
+            fi
+          fi
+
+          echo "✅ Tauri build completed successfully"
+          echo "build_success=true" >> $GITHUB_OUTPUT
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TAURI_BUNDLE_MACOS_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          CI: true
+
+      - name: Verify JRE bundling (Windows)
+        if: matrix.platform == 'windows-latest' && steps.tauri-build.outputs.build_success == 'true'
+        shell: bash
+        run: |
+          echo "🔍 Verifying JRE is bundled in Windows installers..."
+
+          # Get JRE size for reference
+          JRE_SIZE=$(du -sh src-tauri/resources/build-jre 2>/dev/null | cut -f1 || echo "unknown")
+          echo "Source JRE size: ${JRE_SIZE}"
+
+          # Check NSIS installer
+          NSIS_INSTALLER=$(find src-tauri/target/*/release/bundle/nsis -name "*.exe" 2>/dev/null | head -1)
+          if [ -n "$NSIS_INSTALLER" ]; then
+            echo "Found NSIS installer: $NSIS_INSTALLER"
+            
+            # Get installer size
+            INSTALLER_SIZE=$(stat -c%s "$NSIS_INSTALLER" 2>/dev/null || stat -f%z "$NSIS_INSTALLER" 2>/dev/null || echo "0")
+            INSTALLER_SIZE_MB=$((INSTALLER_SIZE / 1024 / 1024))
+            echo "NSIS installer size: ${INSTALLER_SIZE_MB}MB (compressed with LZMA)"
+            
+            # NSIS uses LZMA compression which typically achieves 50-60% compression
+            # A 44MB JRE + ~5MB app should result in ~30-40MB installer
+            # Set minimum to 30MB to account for compression
+            if [ $INSTALLER_SIZE_MB -lt 30 ]; then
+              echo "❌ ERROR: NSIS installer is only ${INSTALLER_SIZE_MB}MB"
+              echo "This is too small - JRE was likely not bundled (expected ~35-45MB compressed)"
+              exit 1
+            else
+              echo "✅ NSIS installer size looks good (${INSTALLER_SIZE_MB}MB with compressed JRE)"
+            fi
+          else
+            echo "⚠️ NSIS installer not found"
+          fi
+
+          # Check MSI installer
+          MSI_INSTALLER=$(find src-tauri/target/*/release/bundle/msi -name "*.msi" 2>/dev/null | head -1)
+          if [ -n "$MSI_INSTALLER" ]; then
+            echo "Found MSI installer: $MSI_INSTALLER"
+            
+            MSI_SIZE=$(stat -c%s "$MSI_INSTALLER" 2>/dev/null || stat -f%z "$MSI_INSTALLER" 2>/dev/null || echo "0")
+            MSI_SIZE_MB=$((MSI_SIZE / 1024 / 1024))
+            echo "MSI installer size: ${MSI_SIZE_MB}MB (compressed)"
+            
+            # MSI also uses compression, expect similar size to NSIS
+            if [ $MSI_SIZE_MB -lt 30 ]; then
+              echo "❌ ERROR: MSI installer is only ${MSI_SIZE_MB}MB"
+              echo "This is too small - JRE was likely not bundled (expected ~35-45MB compressed)"
+              exit 1
+            else
+              echo "✅ MSI installer size looks good (${MSI_SIZE_MB}MB with compressed JRE)"
+            fi
+          else
+            echo "⚠️ MSI installer not found"
+          fi
+
+          echo "✅ Windows JRE bundling verification passed"
+
+      - name: Verify JRE bundling (macOS)
+        if: matrix.platform == 'macos-latest' && steps.tauri-build.outputs.build_success == 'true'
+        shell: bash
+        run: |
+          echo "🔍 Verifying JRE is bundled in macOS .app..."
+
+          # Find the .app bundle
+          APP_BUNDLE=$(find src-tauri/target/*/release/bundle/macos -name "*.app" -type d 2>/dev/null | head -1)
+
+          if [ -z "$APP_BUNDLE" ]; then
+            echo "❌ .app bundle not found"
+            exit 1
+          fi
+
+          echo "Found .app bundle: $APP_BUNDLE"
+
+          # Get source JRE size for reference
+          SOURCE_JRE_SIZE=$(du -sh src-tauri/resources/build-jre 2>/dev/null | cut -f1 || echo "unknown")
+          echo "Source JRE size: ${SOURCE_JRE_SIZE}"
+
+          # Determine which JRE should be present based on target
+          if [[ "${{ matrix.target }}" == "aarch64-apple-darwin" ]]; then
+            JRE_SUBDIR="jre-macos-arm64"
+          else
+            JRE_SUBDIR="jre-macos-x64"
+          fi
+
+          echo "Looking for JRE subdirectory: $JRE_SUBDIR"
+
+          # Check what's actually in Resources
+          echo ""
+          echo "Contents of Resources directory:"
+          ls -la "$APP_BUNDLE/Contents/Resources/" | head -20 || echo "Could not list Resources"
+
+          # Try multiple possible JRE locations
+          JRE_PATHS=(
+            "$APP_BUNDLE/Contents/Resources/build-jre/$JRE_SUBDIR"
+            "$APP_BUNDLE/Contents/Resources/$JRE_SUBDIR"
+            "$APP_BUNDLE/Contents/Resources/build-jre"
+          )
+
+          JRE_PATH=""
+          for path in "${JRE_PATHS[@]}"; do
+            if [ -d "$path" ]; then
+              JRE_PATH="$path"
+              echo "✅ Found JRE at: $JRE_PATH"
+              break
+            fi
+          done
+
+          if [ -z "$JRE_PATH" ]; then
+            echo ""
+            echo "❌ ERROR: JRE directory not found in .app bundle"
+            echo "Searched locations:"
+            for path in "${JRE_PATHS[@]}"; do
+              echo "  - $path"
+            done
+            echo ""
+            echo "Full Resources directory structure:"
+            find "$APP_BUNDLE/Contents/Resources/" -maxdepth 3 -type d 2>/dev/null | head -30
+            echo ""
+            echo "This indicates the JRE was not properly bundled by Tauri."
+            echo "Check tauri.conf.json resources configuration."
+            exit 1
+          fi
+
+          # Check if java executable exists
+          JAVA_EXEC="$JRE_PATH/bin/java"
+          if [ ! -f "$JAVA_EXEC" ]; then
+            # Try alternate paths for macOS JRE structure
+            if [ -f "$JRE_PATH/Contents/Home/bin/java" ]; then
+              JAVA_EXEC="$JRE_PATH/Contents/Home/bin/java"
+            elif [ -f "$JRE_PATH/$JRE_SUBDIR/bin/java" ]; then
+              JAVA_EXEC="$JRE_PATH/$JRE_SUBDIR/bin/java"
+            fi
+          fi
+
+          if [ ! -f "$JAVA_EXEC" ]; then
+            echo "❌ Java executable not found in JRE"
+            echo "Checked paths:"
+            echo "  - $JRE_PATH/bin/java"
+            echo "  - $JRE_PATH/Contents/Home/bin/java"
+            echo "  - $JRE_PATH/$JRE_SUBDIR/bin/java"
+            echo ""
+            echo "JRE directory contents:"
+            ls -la "$JRE_PATH" | head -20 || true
+            exit 1
+          fi
+
+          echo "✅ Java executable found: $JAVA_EXEC"
+
+          # Check JRE size
+          JRE_SIZE=$(du -sh "$JRE_PATH" | cut -f1)
+          echo "JRE size in bundle: $JRE_SIZE"
+
+          # Check overall .app size
+          APP_SIZE=$(du -sh "$APP_BUNDLE" | cut -f1)
+          echo ".app bundle total size: $APP_SIZE"
+
+          echo "✅ macOS JRE bundling verification passed"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TAURI_BUNDLE_MACOS_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          CI: true
+
+      # Tauri always names the macOS updater archive PesaView.app.tar.gz.
+      # Parallel aarch64/x86_64 jobs would otherwise overwrite each other on the
+      # same release asset name — rename before upload so each arch is distinct.
+      - name: Rename macOS updater artifacts by architecture
+        if: matrix.platform == 'macos-latest' && steps.tauri-build.outputs.build_success == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ matrix.target }}" == "aarch64-apple-darwin" ]]; then
+            ARCH_SUFFIX="aarch64"
+          else
+            ARCH_SUFFIX="x86_64"
+          fi
+
+          BUNDLE_DIR=$(find src-tauri/target -type d -path "*/release/bundle/macos" 2>/dev/null | head -1)
+          if [ -z "$BUNDLE_DIR" ]; then
+            echo "❌ macOS bundle directory not found"
+            exit 1
+          fi
+
+          SRC_TAR="$BUNDLE_DIR/PesaView.app.tar.gz"
+          SRC_SIG="$BUNDLE_DIR/PesaView.app.tar.gz.sig"
+          DEST_TAR="$BUNDLE_DIR/PesaView-${ARCH_SUFFIX}.app.tar.gz"
+          DEST_SIG="$BUNDLE_DIR/PesaView-${ARCH_SUFFIX}.app.tar.gz.sig"
+
+          if [ ! -f "$SRC_TAR" ]; then
+            echo "❌ Updater archive not found: $SRC_TAR"
+            find src-tauri/target -name "*.app.tar.gz*" 2>/dev/null || true
+            exit 1
+          fi
+
+          mv "$SRC_TAR" "$DEST_TAR"
+          echo "✅ Renamed updater archive → $(basename "$DEST_TAR")"
+
+          if [ -f "$SRC_SIG" ]; then
+            mv "$SRC_SIG" "$DEST_SIG"
+            echo "✅ Renamed updater signature → $(basename "$DEST_SIG")"
+          else
+            echo "⚠️ Signature file not found at $SRC_SIG"
+          fi
+
+          ls -lh "$DEST_TAR" "$DEST_SIG" 2>/dev/null || ls -lh "$DEST_TAR"
+
+      - name: Create GitHub Release
+        if: steps.tauri-build.outputs.build_success == 'true'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ needs.prepare-release.outputs.tag }}
+          name: "PesaView ${{ needs.prepare-release.outputs.tag }}"
+          body: |
+            ## Changes
+
+            ${{ steps.changelog.outputs.has_breaking == 'true' && '> **Breaking changes** — review the notes below before updating.' || '' }}
+
+            ${{ steps.changelog.outputs.changelog }}
+
+            ## Downloads
+
+            | Platform | Architecture | File |
+            |----------|--------------|------|
+            | Windows | x64 | [Installer (.exe)](https://github.com/${{ github.repository }}/releases/download/${{ needs.prepare-release.outputs.tag }}/PesaView_${{ needs.prepare-release.outputs.version }}_x64-setup.exe) |
+            | macOS | Apple Silicon | [Disk image (.dmg)](https://github.com/${{ github.repository }}/releases/download/${{ needs.prepare-release.outputs.tag }}/PesaView_${{ needs.prepare-release.outputs.version }}_aarch64.dmg) |
+            | macOS | Intel | [Disk image (.dmg)](https://github.com/${{ github.repository }}/releases/download/${{ needs.prepare-release.outputs.tag }}/PesaView_${{ needs.prepare-release.outputs.version }}_x64.dmg) |
+            | Linux | x64 | [Debian package (.deb)](https://github.com/${{ github.repository }}/releases/download/${{ needs.prepare-release.outputs.tag }}/pesaview_${{ needs.prepare-release.outputs.version }}_amd64.deb) |
+            | Linux | x64 | [AppImage](https://github.com/${{ github.repository }}/releases/download/${{ needs.prepare-release.outputs.tag }}/pesaview_${{ needs.prepare-release.outputs.version }}_amd64.AppImage) |
+
+            Built `${{ steps.timestamp.outputs.build_time }}`. Installed copies can update automatically when this release is available.
+
+            **Full changelog:** https://github.com/${{ github.repository }}/compare/v${{ steps.changelog.outputs.previous_version || '0.0.0' }}...v${{ needs.prepare-release.outputs.version }}
+          draft: false
+          prerelease: false
+          files: |
+            src-tauri/target/*/release/bundle/dmg/*.dmg
+            src-tauri/target/*/release/bundle/deb/*.deb
+            src-tauri/target/*/release/bundle/appimage/*.AppImage
+            src-tauri/target/*/release/bundle/nsis/*.exe
+            src-tauri/target/*/release/bundle/msi/*.msi
+            src-tauri/target/*/release/bundle/macos/*.app.tar.gz
+            src-tauri/target/*/release/bundle/appimage/*.AppImage.tar.gz
+            src-tauri/target/*/release/bundle/nsis/*.nsis.zip
+            src-tauri/target/*/release/bundle/**/*.sig
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Step 5: Generate and upload updater JSON
+  generate-updater-json:
+    name: "Generate Updater JSON"
+    needs:
+      [
+        check-release,
+        pre-release-validation,
+        prepare-release,
+        build-and-release,
+      ]
+    if: always() && needs.check-release.result == 'success' && needs.build-and-release.result == 'success' && (needs.pre-release-validation.result == 'success' || needs.pre-release-validation.result == 'skipped')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate and upload latest.json
+        run: |
+          echo "🔄 Generating latest.json for Tauri updater..."
+
+          VERSION="${{ needs.prepare-release.outputs.version }}"
+          TAG="${{ needs.prepare-release.outputs.tag }}"
+
+          # Create the latest.json file with proper Tauri updater format
+          # Try to get release notes from the GitHub API
+          RELEASE_NOTES="Update to version $VERSION. See full release notes at https://github.com/${{ github.repository }}/releases/tag/$TAG"
+
+          # Try to fetch release notes from GitHub API
+          if command -v gh &> /dev/null; then
+            GITHUB_NOTES=$(gh api repos/${{ github.repository }}/releases/latest --jq '.body' 2>/dev/null || echo "")
+            if [ -n "$GITHUB_NOTES" ] && [ "$GITHUB_NOTES" != "null" ]; then
+              RELEASE_NOTES=$(printf '%s' "$GITHUB_NOTES" | head -20 | sed 's/^## /## /g' | sed 's/^### /### /g' | LC_ALL=C tr -d '\000-\011\013-\037\177')
+            fi
+          fi
+
+          # Wait for GitHub to process release assets
+          sleep 10
+
+          # Download signature files from the release
+          # macOS updater archives are arch-specific (see "Rename macOS updater artifacts")
+          mkdir -p signatures
+          for sig_file in \
+            "PesaView-aarch64.app.tar.gz.sig" \
+            "PesaView-x86_64.app.tar.gz.sig" \
+            "pesaview_${VERSION}_amd64.AppImage.sig" \
+            "PesaView_${VERSION}_x64-setup.exe.sig"
+          do
+            gh release download "$TAG" -p "$sig_file" -D signatures 2>/dev/null || echo "" > "signatures/$sig_file"
+          done
+
+          # Read signature files
+          # Tauri v2 uses updater bundle signatures, not installer signatures
+          DARWIN_AARCH64_SIG=$(cat signatures/PesaView-aarch64.app.tar.gz.sig 2>/dev/null || echo "")
+          DARWIN_X86_64_SIG=$(cat signatures/PesaView-x86_64.app.tar.gz.sig 2>/dev/null || echo "")
+          LINUX_X86_64_SIG=$(cat signatures/pesaview_${VERSION}_amd64.AppImage.sig 2>/dev/null || echo "")
+          WINDOWS_X86_64_SIG=$(cat signatures/PesaView_${VERSION}_x64-setup.exe.sig 2>/dev/null || echo "")
+
+          if [ -z "$DARWIN_AARCH64_SIG" ] || [ -z "$DARWIN_X86_64_SIG" ]; then
+            echo "❌ Missing macOS updater signature(s)"
+            echo "  aarch64 sig present: $([ -n "$DARWIN_AARCH64_SIG" ] && echo yes || echo no)"
+            echo "  x86_64 sig present: $([ -n "$DARWIN_X86_64_SIG" ] && echo yes || echo no)"
+            echo "Release assets:"
+            gh release view "$TAG" --json assets --jq '.assets[].name' || true
+            exit 1
+          fi
+
+          # Use jq to properly create JSON with escaped strings
+          # URLs point to updater bundles (.tar.gz, .zip), not installers
+          jq -n \
+            --arg version "$VERSION" \
+            --arg notes "$RELEASE_NOTES" \
+            --arg pub_date "$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")" \
+            --arg darwin_aarch64_url "https://github.com/${{ github.repository }}/releases/download/$TAG/PesaView-aarch64.app.tar.gz" \
+            --arg darwin_aarch64_sig "$DARWIN_AARCH64_SIG" \
+            --arg darwin_x86_64_url "https://github.com/${{ github.repository }}/releases/download/$TAG/PesaView-x86_64.app.tar.gz" \
+            --arg darwin_x86_64_sig "$DARWIN_X86_64_SIG" \
+            --arg linux_x86_64_url "https://github.com/${{ github.repository }}/releases/download/$TAG/pesaview_${VERSION}_amd64.AppImage" \
+            --arg linux_x86_64_sig "$LINUX_X86_64_SIG" \
+            --arg windows_x86_64_url "https://github.com/${{ github.repository }}/releases/download/$TAG/PesaView_${VERSION}_x64-setup.exe" \
+            --arg windows_x86_64_sig "$WINDOWS_X86_64_SIG" \
+            '{
+              version: $version,
+              notes: $notes,
+              pub_date: $pub_date,
+              platforms: {
+                "darwin-aarch64": {
+                  signature: $darwin_aarch64_sig,
+                  url: $darwin_aarch64_url
+                },
+                "darwin-x86_64": {
+                  signature: $darwin_x86_64_sig,
+                  url: $darwin_x86_64_url
+                },
+                "linux-x86_64": {
+                  signature: $linux_x86_64_sig,
+                  url: $linux_x86_64_url
+                },
+                "windows-x86_64": {
+                  signature: $windows_x86_64_sig,
+                  url: $windows_x86_64_url
+                }
+              }
+            }' > latest.json
+
+          echo "📄 Generated latest.json:"
+          jq '{version, platforms: (.platforms | keys), urls: (.platforms | map_values(.url))}' latest.json
+
+          # Upload to the release
+          gh release upload "$TAG" latest.json --clobber
+          echo "✅ latest.json uploaded"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Step 6: Notify about release completion
+  notify-completion:
+    name: "Release Complete"
+    runs-on: ubuntu-latest
+    needs:
+      [
+        pre-release-validation,
+        prepare-release,
+        build-and-release,
+        generate-updater-json,
+      ]
+    if: always() && needs.prepare-release.result == 'success'
+    steps:
+      - name: Release summary
+        run: |
+          echo "🎉 Release ${{ needs.prepare-release.outputs.tag }} completed!"
+          echo "✅ Desktop binaries built and published"
+          echo "🔗 View release: https://github.com/${{ github.repository }}/releases/tag/${{ needs.prepare-release.outputs.tag }}"
+
+          # Create a comprehensive release summary
+          cat > release-summary.md << EOF
+          # 🚀 Release ${{ needs.prepare-release.outputs.tag }} Summary
+
+          ## ✅ Completed Tasks
+          - [x] Pre-release validation passed
+          - [x] Version files synced
+          - [x] Git tag created: ${{ needs.prepare-release.outputs.tag }}
+          - [x] Desktop binaries built for all platforms
+          - [x] GitHub release created
+          - [x] Updater JSON generated
+
+          ## 📊 Build Status
+          - **Trigger**: Manual workflow dispatch
+          - **Validation**: ${{ needs.pre-release-validation.result == 'success' && '✅ Passed' || '⏭️ Skipped' }}
+          - **Desktop Builds**: ✅ Success
+          - **Release Creation**: ✅ Success
+
+          ## 🔗 Links
+          - **Release**: https://github.com/${{ github.repository }}/releases/tag/${{ needs.prepare-release.outputs.tag }}
+          - **Updater JSON**: https://github.com/${{ github.repository }}/releases/download/${{ needs.prepare-release.outputs.tag }}/latest.json
+
+          ## 📱 Available Downloads
+          - Windows x64: [Download .exe](https://github.com/${{ github.repository }}/releases/download/${{ needs.prepare-release.outputs.tag }}/PesaView_${{ needs.prepare-release.outputs.version }}_x64-setup.exe)
+          - macOS Apple Silicon: [Download .dmg](https://github.com/${{ github.repository }}/releases/download/${{ needs.prepare-release.outputs.tag }}/PesaView_${{ needs.prepare-release.outputs.version }}_aarch64.dmg)
+          - macOS Intel: [Download .dmg](https://github.com/${{ github.repository }}/releases/download/${{ needs.prepare-release.outputs.tag }}/PesaView_${{ needs.prepare-release.outputs.version }}_x64.dmg)
+          - Linux x64: [Download .deb](https://github.com/${{ github.repository }}/releases/download/${{ needs.prepare-release.outputs.tag }}/pesaview_${{ needs.prepare-release.outputs.version }}_amd64.deb)
+          - Linux Portable: [Download .AppImage](https://github.com/${{ github.repository }}/releases/download/${{ needs.prepare-release.outputs.tag }}/pesaview_${{ needs.prepare-release.outputs.version }}_amd64.AppImage)
+
+          ---
+
+          **Release completed at**: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+          EOF
+
+          echo "📄 Release summary created"
+          cat release-summary.md
