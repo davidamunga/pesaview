@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Document, pdfjs } from "react-pdf";
 import workerSrc from "pdfjs-dist/build/pdf.worker.min.mjs?url";
@@ -10,6 +10,7 @@ import { PasswordPrompt } from "@/components/password-prompt";
 import { PdfPageView } from "@/components/pdf-page-view";
 import { ReviewStep } from "@/components/review-step";
 import { SelectToolbar } from "@/components/select-toolbar";
+import { UpdateChecker } from "@/components/update-checker";
 import { WizardHeader } from "@/components/wizard-header";
 import { Button } from "@/components/ui/button";
 import {
@@ -23,6 +24,16 @@ import {
 import { applyTemplateArea } from "@/lib/coordinates";
 import { matchTemplate } from "@/lib/matchTemplate";
 import { pickPdf } from "@/lib/pickPdf";
+import {
+  canRedo,
+  canUndo,
+  commitHistory,
+  emptyHistory,
+  present,
+  redoHistory,
+  selectionHistoryAction,
+  undoHistory,
+} from "@/lib/selectionHistory";
 import {
   planAutodetect,
   rememberCopy,
@@ -56,6 +67,7 @@ export default function App() {
   const [pageCount, setPageCount] = useState(0);
   const [currentPage, setCurrentPage] = useState(1);
   const [selections, setSelections] = useState<Selection[]>([]);
+  const [boxHistory, setBoxHistory] = useState(emptyHistory);
   const [excludedPages, setExcludedPages] = useState<Set<number>>(new Set());
   const [pageMetrics, setPageMetrics] = useState<Record<number, PageMetrics>>({});
   const [method, setMethod] = useState<ExtractionMethod>("stream");
@@ -129,6 +141,7 @@ export default function App() {
     setPageCount(0);
     setCurrentPage(1);
     setSelections([]);
+    setBoxHistory(emptyHistory());
     setExcludedPages(new Set());
     setPageMetrics({});
     setNeedPassword(false);
@@ -183,9 +196,51 @@ export default function App() {
     }
   };
 
+  const replaceBoxes = (next: Selection[], record = true) => {
+    if (record) {
+      setBoxHistory((history) => commitHistory(history, next));
+    }
+    setSelections(next);
+  };
+
+  const undoBoxes = useCallback(() => {
+    setBoxHistory((history) => {
+      if (!canUndo(history)) return history;
+      const next = undoHistory(history);
+      setSelections(present(next));
+      return next;
+    });
+  }, []);
+
+  const redoBoxes = useCallback(() => {
+    setBoxHistory((history) => {
+      if (!canRedo(history)) return history;
+      const next = redoHistory(history);
+      setSelections(present(next));
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    if (step !== "select") return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      const action = selectionHistoryAction(event);
+      if (!action) return;
+      event.preventDefault();
+      if (action === "undo") undoBoxes();
+      else redoBoxes();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [step, undoBoxes, redoBoxes]);
+
   const setExtractionMethod = (next: ExtractionMethod) => {
     setMethod(next);
-    setSelections((current) => current.map((selection) => ({ ...selection, method: next })));
+    setSelections((current) => {
+      const mapped = current.map((selection) => ({ ...selection, method: next }));
+      setBoxHistory((history) => commitHistory(history, mapped));
+      return mapped;
+    });
     setStatus(
       next === "lattice"
         ? "Using ruled lines. Draw or adjust the box if columns still look off."
@@ -211,7 +266,7 @@ export default function App() {
         next.push(applyTemplateArea(area, page, metrics, { normalized: template.normalized }));
       }
     }
-    setSelections(next);
+    replaceBoxes(next);
     setActiveTemplate(template);
     setStatus(`Applied “${template.name}”. Adjust the boxes if the table looks off.`);
   };
@@ -241,14 +296,14 @@ export default function App() {
     setStatus(`Saved “${name}” for later statements with this layout.`);
   };
 
-  const handleSelectionsChange = (next: Selection[]) => {
+  const handleSelectionsChange = (next: Selection[], options?: { commit?: boolean }) => {
     const stamped = stampSelectionsToEmptyPages(
       next,
       includedPages(),
       pageMetrics,
       pageMetrics[currentPage],
     );
-    setSelections(stamped);
+    replaceBoxes(stamped, options?.commit !== false);
     if (stamped.length > next.length) {
       setStatus("Using this box on the other pages. Continue to check the rows.");
     }
@@ -279,7 +334,7 @@ export default function App() {
           pageMetrics,
           pageMetrics[currentPage],
         );
-        setSelections(stamped);
+        replaceBoxes(stamped);
         setActiveTemplate(matched ?? null);
         setStatus(
           stamped.length > next.length
@@ -299,7 +354,7 @@ export default function App() {
         }
         return;
       }
-      setSelections([]);
+      replaceBoxes([]);
       setActiveTemplate(null);
       setStatus(plan.status);
     } catch (error) {
@@ -406,6 +461,7 @@ export default function App() {
 
   return (
     <div className="relative flex h-full flex-col">
+      <UpdateChecker autoCheck />
       <WizardHeader
         step={step}
         canSelect={canSelect}
@@ -418,7 +474,7 @@ export default function App() {
         hidden={step !== "upload" && Boolean(pdf)}
         inert={step !== "upload" && Boolean(pdf) ? true : undefined}
         className={cn(
-          "flex-1 items-center px-3",
+          "min-h-0 flex-1 flex-col",
           step === "upload" || !pdf ? "flex" : "hidden",
         )}
       >
@@ -446,11 +502,15 @@ export default function App() {
             templates={templates}
             continueHint={continueHint}
             canContinue={canContinue}
+            canUndo={canUndo(boxHistory)}
+            canRedo={canRedo(boxHistory)}
+            onUndo={undoBoxes}
+            onRedo={redoBoxes}
             onMethodChange={setExtractionMethod}
             onApplyTemplate={applyTemplate}
             onSaveTemplate={(name) => void rememberLayout(name)}
             onClear={() => {
-              setSelections([]);
+              replaceBoxes([]);
               setActiveTemplate(null);
               setStatus("");
             }}
@@ -499,7 +559,7 @@ export default function App() {
                     });
                   }}
                 />
-                <div ref={viewerRef} className="relative min-w-0 flex-1 overflow-auto bg-muted/50">
+                <div ref={viewerRef} className="relative min-w-0 flex-1 overflow-auto bg-background">
                   {selections.length === 0 && !busy && (
                     <p className="pointer-events-none absolute top-4 left-1/2 z-10 -translate-x-1/2 rounded-full border bg-card px-3 py-1.5 text-sm text-muted-foreground shadow-xs">
                       Drag a box around the transaction rows

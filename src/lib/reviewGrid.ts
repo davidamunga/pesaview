@@ -41,6 +41,7 @@ export function correctionsFromEdits(
   columns: string[],
   edits: Record<string, string>,
   removed: ReadonlySet<number> = new Set(),
+  removedRows: ReadonlySet<string> = new Set(),
 ): CellCorrection[] {
   const byId = new Map(original.map((row) => [row.id, row]));
   const corrections: CellCorrection[] = [];
@@ -49,7 +50,7 @@ export function correctionsFromEdits(
     const rowId = key.slice(0, split);
     const column = Number(key.slice(split + 1));
     const row = byId.get(rowId);
-    if (!row || Number.isNaN(column) || removed.has(column)) continue;
+    if (!row || Number.isNaN(column) || removed.has(column) || removedRows.has(rowId)) continue;
     const previous = row.cells[column] ?? "";
     if (previous === next) continue;
     corrections.push({
@@ -67,15 +68,30 @@ export function projectReview(
   columns: string[],
   rows: ReviewRow[],
   removed: ReadonlySet<number>,
+  removedRows: ReadonlySet<string> = new Set(),
 ): { columns: string[]; rows: ReviewRow[] } {
   const keep = columns.map((_, index) => index).filter((index) => !removed.has(index));
   return {
     columns: keep.map((index) => columns[index]),
-    rows: rows.map((row) => ({
-      ...row,
-      cells: keep.map((index) => row.cells[index] ?? ""),
-    })),
+    rows: rows
+      .filter((row) => !removedRows.has(row.id))
+      .map((row) => ({
+        ...row,
+        cells: keep.map((index) => row.cells[index] ?? ""),
+      })),
   };
+}
+
+/** Short restore chip for a dropped review row. */
+export function droppedRowLabel(row: ReviewRow, names: string[]): string {
+  const dateIdx = names.findIndex(isDateColumn);
+  const narrIdx = names.findIndex(isNarrativeColumn);
+  const date = dateIdx >= 0 ? row.cells[dateIdx]?.trim() : "";
+  const story = (
+    narrIdx >= 0 ? row.cells[narrIdx] : row.cells.find((cell) => cell.trim())
+  )?.trim() ?? "";
+  const short = story.length > 36 ? `${story.slice(0, 35)}…` : story;
+  return [date, short].filter(Boolean).join(" · ") || `Page ${row.page}`;
 }
 
 export type ColumnSuspectKind = "unnamed" | "empty" | "joined";

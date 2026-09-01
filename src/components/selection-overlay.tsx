@@ -17,7 +17,7 @@ interface SelectionOverlayProps {
   metrics: PageMetrics;
   selections: Selection[];
   defaultMethod: ExtractionMethod;
-  onChange: (selections: Selection[]) => void;
+  onChange: (selections: Selection[], options?: { commit?: boolean }) => void;
 }
 
 const HANDLES: { id: ResizeHandle; className: string }[] = [
@@ -59,13 +59,14 @@ export function SelectionOverlay({
     };
   };
 
-  const replaceBox = (id: string, rect: CssRect) => {
+  const replaceBox = (id: string, rect: CssRect, commit = false) => {
     const current = selections.find((selection) => selection.id === id);
     if (!current) return;
     onChange(
       selections.map((selection) =>
         selection.id === id ? selectionFromCss(rect, metrics, current) : selection,
       ),
+      { commit },
     );
   };
 
@@ -103,18 +104,23 @@ export function SelectionOverlay({
     const active = gesture.current;
     if (active?.type === "draw" && draft && draft.width > 8 && draft.height > 8) {
       const pdf = cssToPdf(draft, metrics);
-      onChange([
-        ...selections,
-        {
-          id: createId(),
-          page,
-          top: pdf.top,
-          left: pdf.left,
-          bottom: pdf.bottom,
-          right: pdf.right,
-          method: defaultMethod,
-        },
-      ]);
+      onChange(
+        [
+          ...selections,
+          {
+            id: createId(),
+            page,
+            top: pdf.top,
+            left: pdf.left,
+            bottom: pdf.bottom,
+            right: pdf.right,
+            method: defaultMethod,
+          },
+        ],
+        { commit: true },
+      );
+    } else if (active?.type === "move" || active?.type === "resize") {
+      onChange(selections, { commit: true });
     }
     gesture.current = null;
     setDraft(null);

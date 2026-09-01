@@ -81,24 +81,26 @@ export function FileOpener({
 
   if (currentFile) {
     return (
-      <div className="mx-auto flex w-full max-w-lg flex-col gap-3">
-        <div className="rounded-xl border bg-card px-5 py-6">
-          <HeadingTag
-            ref={headingRef}
-            tabIndex={headingRef ? -1 : undefined}
-            className="text-base font-semibold outline-none"
-          >
-            This statement
-          </HeadingTag>
-          <p className="mt-2 truncate text-sm" title={currentFile.name}>
-            {currentFile.name}
-          </p>
-          {currentFile.pageCount ? (
-            <p className="mt-1 text-sm text-muted-foreground">
-              {currentFile.pageCount} {currentFile.pageCount === 1 ? "page" : "pages"}
+      <div className="flex h-full w-full flex-col justify-center px-8 py-10">
+        <div className="flex w-full max-w-3xl flex-col gap-5">
+          <div className="flex flex-col gap-2">
+            <HeadingTag
+              ref={headingRef}
+              tabIndex={headingRef ? -1 : undefined}
+              className="text-xl leading-tight font-semibold tracking-tight outline-none"
+            >
+              This statement
+            </HeadingTag>
+            <p className="truncate text-base" title={currentFile.name}>
+              {currentFile.name}
             </p>
-          ) : null}
-          <div className="mt-4 flex flex-wrap gap-2">
+            {currentFile.pageCount ? (
+              <p className="text-sm text-muted-foreground">
+                {currentFile.pageCount} {currentFile.pageCount === 1 ? "page" : "pages"}
+              </p>
+            ) : null}
+          </div>
+          <div className="flex flex-wrap gap-3">
             <Button disabled={busy} onClick={onKeepFile}>
               Continue with this file
             </Button>
@@ -106,67 +108,57 @@ export function FileOpener({
               Replace PDF…
             </Button>
           </div>
+          {error ? (
+            <p className="text-sm text-destructive">{error}</p>
+          ) : null}
         </div>
-        {error && (
-          <p className="rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-            {error}
-          </p>
-        )}
       </div>
     );
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-lg flex-col gap-3">
-      <div
-        role="button"
-        tabIndex={0}
-        aria-label="Drop a PDF statement or browse to open one"
-        className={cn(
-          "relative flex min-h-52 cursor-pointer flex-col items-center justify-center overflow-hidden rounded-xl border border-dashed px-6 py-8 text-center transition outline-none",
-          "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
-          dragActive
-            ? "border-primary bg-primary/8"
-            : "border-muted-foreground/30 bg-card hover:border-primary/50 hover:bg-muted/30",
-        )}
-        onClick={() => void browse()}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault();
-            void browse();
-          }
-        }}
-      >
-        <HeadingTag
-          ref={headingRef}
-          tabIndex={headingRef ? -1 : undefined}
-          className="text-base font-semibold outline-none"
-        >
-          {dragActive ? "Release to open" : "Drop a bank or M-PESA statement"}
-        </HeadingTag>
-        <p className="mt-1.5 max-w-sm text-sm text-muted-foreground">
-          Then mark the transaction table, review the rows, and export CSV or Excel. The file stays
-          on this device.
-        </p>
-        {!dragActive && (
-          <Button
-            className="mt-4"
-            size="sm"
-            disabled={busy}
-            onClick={(event) => {
-              event.stopPropagation();
-              void browse();
-            }}
+    <div className="flex h-full w-full flex-col justify-center px-8 py-10">
+      <div className="flex w-full max-w-3xl flex-col gap-5">
+        <div className="flex flex-col gap-2">
+          <HeadingTag
+            ref={headingRef}
+            tabIndex={headingRef ? -1 : undefined}
+            className="text-xl leading-tight font-semibold tracking-tight outline-none"
           >
-            Browse PDF
-          </Button>
-        )}
+            Open a statement
+          </HeadingTag>
+          <p className="max-w-[42ch] text-base leading-relaxed text-muted-foreground">
+            The file stays on this device.
+          </p>
+        </div>
+        <div
+          className={cn(
+            "flex min-h-32 cursor-pointer items-center justify-between gap-4 rounded-md border border-dashed px-5 py-4 transition",
+            dragActive
+              ? "border-primary bg-primary/10"
+              : "border-border hover:border-primary/50 hover:bg-muted/40",
+          )}
+          onClick={() => void browse()}
+        >
+          <p className="text-base font-medium">
+            {dragActive ? "Release to open" : "Drop a PDF here"}
+          </p>
+          {!dragActive ? (
+            <Button
+              disabled={busy}
+              onClick={(event) => {
+                event.stopPropagation();
+                void browse();
+              }}
+            >
+              Browse PDF
+            </Button>
+          ) : null}
+        </div>
+        {error ? (
+          <p className="text-sm text-destructive">{error}</p>
+        ) : null}
       </div>
-      {error && (
-        <p className="rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-          {error}
-        </p>
-      )}
     </div>
   );
 }

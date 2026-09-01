@@ -8,6 +8,7 @@ import {
   applyReviewEdits,
   columnSuspects,
   correctionsFromEdits,
+  droppedRowLabel,
   editKey,
   isDateColumn,
   isMoneyColumn,
@@ -28,7 +29,8 @@ const editedMark = "bg-amber-200/80 dark:bg-amber-400/25";
 
 type HeaderRole = "page" | "date" | "narrative" | "money" | "plain";
 
-function headerRole(id: string, names: string[]): HeaderRole {
+function headerRole(id: string, names: string[]): HeaderRole | "drop" {
+  if (id === "drop") return "drop";
   if (id === "page") return "page";
   const name = names[Number(id.slice(1))] ?? "";
   if (isDateColumn(name)) return "date";
@@ -37,7 +39,8 @@ function headerRole(id: string, names: string[]): HeaderRole {
   return "plain";
 }
 
-function roleClass(role: HeaderRole, grow: boolean): string {
+function roleClass(role: HeaderRole | "drop", grow: boolean): string {
+  if (role === "drop") return "ledger-drop";
   if (role === "page") return "ledger-page";
   if (role === "date") return "ledger-date";
   if (role === "money") return "ledger-money";
@@ -54,6 +57,7 @@ interface ReviewEditContextValue {
   suspects: ColumnSuspect[];
   rename: (index: number, next: string) => void;
   remove: (index: number) => void;
+  dropRow: (id: string) => void;
   editCell: (rowId: string, index: number, next: string) => void;
 }
 
@@ -120,6 +124,25 @@ function ColumnHeader({ index }: { index: number }) {
         </button>
       )}
     </div>
+  );
+}
+
+function RowDropButton({ row, rowIndex }: { row: ReviewRow; rowIndex: number }) {
+  const { dropRow } = useReviewEdit();
+  return (
+    <button
+      type="button"
+      aria-label={`Drop row ${rowIndex + 1}`}
+      title="Drop this row"
+      className={cn(
+        "inline-flex size-6 items-center justify-center rounded-sm text-muted-foreground outline-none",
+        "opacity-0 hover:bg-muted hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring",
+        "group-hover/row:opacity-100 pointer-coarse:opacity-70",
+      )}
+      onClick={() => dropRow(row.id)}
+    >
+      <X className="size-3" />
+    </button>
   );
 }
 
@@ -198,6 +221,7 @@ export function ReviewStep({
   const [edits, setEdits] = useState<Record<string, string>>({});
   const [columnNames, setColumnNames] = useState<string[]>([]);
   const [removed, setRemoved] = useState<Set<number>>(new Set());
+  const [removedRows, setRemovedRows] = useState<Set<string>>(new Set());
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
   const [layoutName, setLayoutName] = useState(suggestedLayoutName);
@@ -215,6 +239,7 @@ export function ReviewStep({
   useEffect(() => {
     setColumnNames(sourceNames);
     setRemoved(new Set());
+    setRemovedRows(new Set());
     setEdits({});
     // Reset when the extracted header set changes, not on array identity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -226,16 +251,24 @@ export function ReviewStep({
     [names, removed],
   );
   const rows = useMemo(() => applyReviewEdits(original, edits), [original, edits]);
-  const corrections = useMemo(
-    () => correctionsFromEdits(original, names, edits, removed),
-    [original, names, edits, removed],
+  const visibleRows = useMemo(
+    () => rows.filter((row) => !removedRows.has(row.id)),
+    [rows, removedRows],
   );
-  const suspects = useMemo(() => columnSuspects(names, rows), [names, rows]);
+  const corrections = useMemo(
+    () => correctionsFromEdits(original, names, edits, removed, removedRows),
+    [original, names, edits, removed, removedRows],
+  );
+  const suspects = useMemo(() => columnSuspects(names, visibleRows), [names, visibleRows]);
   const dropped = useMemo(
     () => [...removed].sort((a, b) => a - b),
     [removed],
   );
-  const hasRows = rows.length > 0;
+  const droppedRowItems = useMemo(
+    () => original.filter((row) => removedRows.has(row.id)),
+    [original, removedRows],
+  );
+  const hasRows = visibleRows.length > 0;
   const growHeaderId = useMemo(() => {
     const ids = visible.map((index) => `c${index}`);
     return (
@@ -266,6 +299,18 @@ export function ReviewStep({
     });
   }, []);
 
+  const dropRow = useCallback((id: string) => {
+    setRemovedRows((current) => new Set(current).add(id));
+  }, []);
+
+  const restoreRow = useCallback((id: string) => {
+    setRemovedRows((current) => {
+      const next = new Set(current);
+      next.delete(id);
+      return next;
+    });
+  }, []);
+
   const editCell = useCallback(
     (rowId: string, index: number, next: string) => {
       setEdits((current) => {
@@ -283,6 +328,11 @@ export function ReviewStep({
   const columns = useMemo(
     () =>
       helper.columns([
+        helper.display({
+          id: "drop",
+          header: () => <span className="sr-only">Drop row</span>,
+          cell: (info) => <RowDropButton row={info.row.original} rowIndex={info.row.index} />,
+        }),
         helper.accessor("page", {
           header: () => <span className="ledger-folio-label">Page</span>,
           cell: (info) => <span className="ledger-folio">{info.getValue()}</span>,
@@ -308,14 +358,14 @@ export function ReviewStep({
   const table = useTable({
     features,
     columns,
-    data: rows,
+    data: visibleRows,
   });
 
   const save = async (kind: "csv" | "xlsx") => {
     setSaveError("");
     setSaving(true);
     try {
-      const projected = projectReview(names, rows, removed);
+      const projected = projectReview(names, rows, removed, removedRows);
       const nextTables = reviewToTables(projected.columns, projected.rows);
       if (kind === "csv") {
         await exportCsv(nextTables, fileName);
@@ -341,16 +391,16 @@ export function ReviewStep({
   const status = loading
     ? `Reading ${boxSummary}…`
     : hasRows
-      ? `${rows.length} rows · ${boxSummary}${
+      ? `${visibleRows.length} rows · ${boxSummary}${
           corrections.length ? ` · ${corrections.length} corrected` : ""
-        }`
+        }${removedRows.size ? ` · ${removedRows.size} dropped` : ""}`
       : `No rows · ${boxSummary}`;
   const exportHint = hasRows
     ? undefined
     : loading
       ? "Wait for rows before export."
       : "Adjust the boxes, then export.";
-  const showHelper = hasRows && dropped.length === 0 && suspects.length === 0;
+  const showHelper = hasRows && dropped.length === 0 && droppedRowItems.length === 0 && suspects.length === 0;
   const showRemember = Boolean(canRemember && onRememberLayout && hasRows && !rememberDismissed);
 
   const editValue: ReviewEditContextValue = {
@@ -362,13 +412,14 @@ export function ReviewStep({
     suspects,
     rename,
     remove,
+    dropRow,
     editCell,
   };
 
   return (
     <ReviewEditContext.Provider value={editValue}>
       <main className="flex min-h-0 flex-1 flex-col bg-background">
-        <div className="flex shrink-0 flex-wrap items-center gap-2 border-b bg-card px-2.5 py-1.5">
+        <div className="flex shrink-0 flex-wrap items-center gap-2 bg-background px-3 py-1.5">
           <h1 ref={headingRef} tabIndex={-1} className="text-sm font-semibold outline-none">
             Review
           </h1>
@@ -408,14 +459,14 @@ export function ReviewStep({
         </div>
         {showRemember && (
           <form
-            className="flex flex-wrap items-center gap-2 border-b bg-card px-2.5 py-1.5"
+            className="flex flex-wrap items-center gap-2 bg-background px-3 py-1.5"
             onSubmit={(event) => {
               event.preventDefault();
               const next = layoutName.trim();
               if (!next) return;
               onRememberLayout?.({
                 name: next,
-                columns: projectReview(names, rows, removed).columns,
+                columns: projectReview(names, rows, removed, removedRows).columns,
               });
               setRememberDismissed(true);
             }}
@@ -437,14 +488,14 @@ export function ReviewStep({
             </Button>
           </form>
         )}
-        {dropped.length > 0 && (
-          <div className="flex flex-wrap items-center gap-1.5 border-b bg-card px-2.5 py-1.5">
+        {(dropped.length > 0 || droppedRowItems.length > 0) && (
+          <div className="flex flex-wrap items-center gap-1.5 bg-background px-3 py-1.5">
             <p className="text-xs text-muted-foreground">Dropped</p>
             {dropped.map((index) => {
               const label = names[index] || sourceNames[index] || `Column ${index + 1}`;
               return (
                 <button
-                  key={index}
+                  key={`col-${index}`}
                   type="button"
                   className="rounded-md border px-2 py-0.5 text-xs text-foreground outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
                   onClick={() => restore(index)}
@@ -454,6 +505,17 @@ export function ReviewStep({
                 </button>
               );
             })}
+            {droppedRowItems.map((row) => (
+              <button
+                key={row.id}
+                type="button"
+                className="rounded-md border px-2 py-0.5 text-xs text-foreground outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
+                onClick={() => restoreRow(row.id)}
+              >
+                {droppedRowLabel(row, names)}
+                <span className="text-muted-foreground"> · Restore</span>
+              </button>
+            ))}
           </div>
         )}
         <div className="min-h-0 flex-1 overflow-auto">
@@ -468,14 +530,18 @@ export function ReviewStep({
             )}
             {!loading && canExtract && !hasRows && !error && (
               <p className="text-sm text-muted-foreground">
-                No rows came out of those boxes. Go back and adjust them.
+                {droppedRowItems.length > 0
+                  ? "Every row is dropped. Restore one above, or go back and adjust the boxes."
+                  : "No rows came out of those boxes. Go back and adjust them."}
               </p>
             )}
           </div>
           {hasRows && (
             <div className="ledger-sheet">
               {showHelper && (
-                <p className="ledger-caption">Type a header to rename it. Amber is yours.</p>
+                <p className="ledger-caption">
+                  Rename a header. Hover a row to drop it. Amber is yours.
+                </p>
               )}
               <Table className="ledger" containerClassName="overflow-visible">
                 <TableHeader>
@@ -488,7 +554,8 @@ export function ReviewStep({
                           <TableHead
                             key={header.id}
                             className={cn(
-                              "h-auto min-w-0 px-2.5 py-2 align-bottom whitespace-normal text-foreground",
+                              "h-auto min-w-0 py-2 align-bottom whitespace-normal text-foreground",
+                              role === "drop" ? "px-1" : "px-2.5",
                               roleClass(role, grow),
                               role === "money" && "text-right",
                             )}
@@ -502,7 +569,7 @@ export function ReviewStep({
                 </TableHeader>
                 <TableBody>
                   {table.getRowModel().rows.map((row) => (
-                    <TableRow key={row.id} className="border-0 hover:bg-transparent">
+                    <TableRow key={row.id} className="group/row border-0 hover:bg-transparent">
                       {row.getAllCells().map((cell) => {
                         const role = headerRole(cell.column.id, names);
                         const grow = cell.column.id === growHeaderId;
@@ -510,7 +577,8 @@ export function ReviewStep({
                           <TableCell
                             key={cell.id}
                             className={cn(
-                              "min-w-0 px-2.5 py-2 align-top leading-normal whitespace-normal",
+                              "min-w-0 py-2 align-top leading-normal whitespace-normal",
+                              role === "drop" ? "px-1" : "px-2.5",
                               roleClass(role, grow),
                               role === "money" && "text-right",
                             )}

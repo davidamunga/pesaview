@@ -1,5 +1,5 @@
 import type { RefObject } from "react";
-import { Check, CircleX, Zap } from "lucide-react";
+import { Check, CircleX, Redo2, Undo2, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { TemplatesMenu } from "@/components/templates-menu";
 import {
@@ -12,6 +12,11 @@ import {
 } from "@/components/ui/menu";
 import type { ExtractionMethod, StatementTemplate } from "@/types";
 
+const apple =
+  typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.userAgent);
+const undoShortcut = apple ? "⌘Z" : "Ctrl+Z";
+const redoShortcut = apple ? "⌘⇧Z" : "Ctrl+Y";
+
 interface SelectToolbarProps {
   selectionCount: number;
   busy?: boolean;
@@ -20,6 +25,10 @@ interface SelectToolbarProps {
   templates: StatementTemplate[];
   continueHint: string;
   canContinue: boolean;
+  canUndo: boolean;
+  canRedo: boolean;
+  onUndo: () => void;
+  onRedo: () => void;
   onMethodChange: (method: ExtractionMethod) => void;
   onApplyTemplate: (template: StatementTemplate) => void;
   onSaveTemplate: (name: string) => void;
@@ -38,6 +47,10 @@ export function SelectToolbar({
   templates,
   continueHint,
   canContinue,
+  canUndo,
+  canRedo,
+  onUndo,
+  onRedo,
   onMethodChange,
   onApplyTemplate,
   onSaveTemplate,
@@ -48,7 +61,7 @@ export function SelectToolbar({
   headingRef,
 }: SelectToolbarProps) {
   return (
-    <div className="flex shrink-0 flex-wrap items-center gap-2 border-b bg-card px-2.5 py-1.5">
+    <div className="flex shrink-0 flex-wrap items-center gap-2 bg-background px-3 py-1.5">
       {headingRef ? (
         <h1 ref={headingRef} tabIndex={-1} className="sr-only outline-none">
           Select tables
@@ -56,6 +69,28 @@ export function SelectToolbar({
       ) : null}
       <Button variant="ghost" size="xs" disabled={busy} onClick={onChangePdf}>
         Change PDF
+      </Button>
+      <Button
+        variant="ghost"
+        size="xs"
+        disabled={busy || !canUndo}
+        title={`Undo box (${undoShortcut})`}
+        aria-keyshortcuts={undoShortcut}
+        onClick={onUndo}
+      >
+        <Undo2 />
+        Undo
+      </Button>
+      <Button
+        variant="ghost"
+        size="xs"
+        disabled={busy || !canRedo}
+        title={`Redo box (${redoShortcut})`}
+        aria-keyshortcuts={redoShortcut}
+        onClick={onRedo}
+      >
+        <Redo2 />
+        Redo
       </Button>
       {method === "lattice" && (
         <p className="text-xs text-muted-foreground">Using ruled lines</p>

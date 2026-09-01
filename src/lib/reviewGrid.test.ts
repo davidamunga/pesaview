@@ -3,6 +3,7 @@ import {
   applyReviewEdits,
   columnSuspects,
   correctionsFromEdits,
+  droppedRowLabel,
   editKey,
   isDateColumn,
   isMoneyColumn,
@@ -52,6 +53,22 @@ describe("reviewGrid", () => {
     );
   });
 
+  it("drops rows from the projected export", () => {
+    const { columns, rows } = tablesToReview(tables);
+    const projected = projectReview(columns, rows, new Set(), new Set([rows[0].id]));
+    expect(projected.rows).toHaveLength(1);
+    expect(projected.rows[0].cells).toEqual(["03-11-2024", "Visa"]);
+    expect(
+      correctionsFromEdits(
+        rows,
+        columns,
+        { [editKey(rows[0].id, 1)]: "ignored" },
+        new Set(),
+        new Set([rows[0].id]),
+      ),
+    ).toEqual([]);
+  });
+
   it("stamps unnamed, empty, and smashed headers", () => {
     const rows = [
       { id: "1", page: 1, cells: ["03-11-2025", "", "VISA", "100", ""] },
@@ -83,5 +100,14 @@ describe("reviewGrid", () => {
     expect(isDateColumn("Date")).toBe(true);
     expect(isDateColumn("Value Date")).toBe(true);
     expect(isDateColumn("Debit")).toBe(false);
+  });
+
+  it("labels a dropped row from date and particulars", () => {
+    expect(
+      droppedRowLabel(
+        { id: "1", page: 2, cells: ["03-11-2024", "Visa International Nairobi"] },
+        ["Date", "Particulars"],
+      ),
+    ).toBe("03-11-2024 · Visa International Nairobi");
   });
 });

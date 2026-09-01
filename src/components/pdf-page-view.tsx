@@ -8,7 +8,7 @@ interface PdfPageViewProps {
   width: number;
   selections: Selection[];
   defaultMethod: ExtractionMethod;
-  onSelectionsChange: (selections: Selection[]) => void;
+  onSelectionsChange: (selections: Selection[], options?: { commit?: boolean }) => void;
   onMetrics: (metrics: PageMetrics) => void;
 }
 

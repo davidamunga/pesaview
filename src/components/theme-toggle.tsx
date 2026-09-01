@@ -24,7 +24,8 @@ export function ThemeToggle() {
         render={
           <Button
             variant="ghost"
-            size="icon-xs"
+            size="icon-sm"
+            className="text-muted-foreground"
             aria-label={`Theme: ${theme === "system" ? `match system (${resolved})` : theme}`}
             title="Theme"
           >
