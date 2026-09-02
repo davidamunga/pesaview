@@ -81,9 +81,9 @@ export function FileOpener({
 
   if (currentFile) {
     return (
-      <div className="flex h-full w-full flex-col justify-center px-8 py-10">
-        <div className="flex w-full max-w-3xl flex-col gap-5">
-          <div className="flex flex-col gap-2">
+      <div className="flex h-full w-full flex-col px-8 pt-6 pb-8">
+        <div className="flex min-h-0 w-full flex-1 flex-col gap-5">
+          <div className="flex flex-col gap-1.5">
             <HeadingTag
               ref={headingRef}
               tabIndex={headingRef ? -1 : undefined}
@@ -91,22 +91,29 @@ export function FileOpener({
             >
               This statement
             </HeadingTag>
-            <p className="truncate text-base" title={currentFile.name}>
-              {currentFile.name}
+            <p className="text-sm leading-relaxed text-muted-foreground">
+              Continue to mark the table, or replace the file.
             </p>
-            {currentFile.pageCount ? (
-              <p className="text-sm text-muted-foreground">
-                {currentFile.pageCount} {currentFile.pageCount === 1 ? "page" : "pages"}
-              </p>
-            ) : null}
           </div>
-          <div className="flex flex-wrap gap-3">
-            <Button disabled={busy} onClick={onKeepFile}>
-              Continue with this file
-            </Button>
-            <Button variant="outline" disabled={busy} onClick={() => void browse()}>
-              Replace PDF…
-            </Button>
+          <div className="flex min-h-0 flex-1 flex-col justify-between rounded-md border border-border bg-muted/25 px-5 py-5">
+            <div className="flex min-w-0 flex-col gap-1">
+              <p className="truncate text-base font-medium" title={currentFile.name}>
+                {currentFile.name}
+              </p>
+              {currentFile.pageCount ? (
+                <p className="text-sm text-muted-foreground">
+                  {currentFile.pageCount} {currentFile.pageCount === 1 ? "page" : "pages"}
+                </p>
+              ) : null}
+            </div>
+            <div className="flex flex-wrap gap-3 pt-6">
+              <Button disabled={busy} onClick={onKeepFile}>
+                Continue with this file
+              </Button>
+              <Button variant="outline" disabled={busy} onClick={() => void browse()}>
+                Replace PDF…
+              </Button>
+            </div>
           </div>
           {error ? (
             <p className="text-sm text-destructive">{error}</p>
@@ -117,9 +124,9 @@ export function FileOpener({
   }
 
   return (
-    <div className="flex h-full w-full flex-col justify-center px-8 py-10">
-      <div className="flex w-full max-w-3xl flex-col gap-5">
-        <div className="flex flex-col gap-2">
+    <div className="flex h-full w-full flex-col px-8 pt-6 pb-8">
+      <div className="flex min-h-0 w-full flex-1 flex-col gap-5">
+        <div className="flex flex-col gap-1.5">
           <HeadingTag
             ref={headingRef}
             tabIndex={headingRef ? -1 : undefined}
@@ -127,33 +134,39 @@ export function FileOpener({
           >
             Open a statement
           </HeadingTag>
-          <p className="max-w-[42ch] text-base leading-relaxed text-muted-foreground">
-            The file stays on this device.
+          <p className="max-w-[46ch] text-sm leading-relaxed text-muted-foreground">
+            Mark the table on the page, review the grid, then export. The PDF stays on this
+            computer.
           </p>
         </div>
         <div
           className={cn(
-            "flex min-h-32 cursor-pointer items-center justify-between gap-4 rounded-md border border-dashed px-5 py-4 transition",
+            "flex min-h-48 flex-1 cursor-pointer flex-col rounded-md border border-dashed transition",
             dragActive
               ? "border-primary bg-primary/10"
-              : "border-border hover:border-primary/50 hover:bg-muted/40",
+              : "border-foreground/22 bg-muted/30 hover:border-primary/55 hover:bg-muted/45",
           )}
           onClick={() => void browse()}
         >
-          <p className="text-base font-medium">
-            {dragActive ? "Release to open" : "Drop a PDF here"}
+          <div className="flex flex-1 flex-col items-start justify-center gap-4 px-6 py-8">
+            <p className="text-lg leading-none font-medium">
+              {dragActive ? "Release to open" : "Drop a PDF here"}
+            </p>
+            {!dragActive ? (
+              <Button
+                disabled={busy}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  void browse();
+                }}
+              >
+                Browse PDF
+              </Button>
+            ) : null}
+          </div>
+          <p className="px-6 pb-4 text-sm text-muted-foreground">
+            Password-protected files are fine. Nothing is uploaded.
           </p>
-          {!dragActive ? (
-            <Button
-              disabled={busy}
-              onClick={(event) => {
-                event.stopPropagation();
-                void browse();
-              }}
-            >
-              Browse PDF
-            </Button>
-          ) : null}
         </div>
         {error ? (
           <p className="text-sm text-destructive">{error}</p>

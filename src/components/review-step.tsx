@@ -166,9 +166,9 @@ function CellEditor({
   const narrative = isNarrativeColumn(label);
   const empty = value.trim() === "";
   const fieldClass = cn(
-    "w-full bg-transparent px-0.5 text-foreground outline-none",
+    "w-full min-w-0 bg-transparent px-0.5 text-foreground outline-none",
     "focus-visible:bg-black/4 dark:focus-visible:bg-white/6",
-    narrative ? "ledger-narrative-input" : "h-8 text-[13px] leading-5",
+    narrative ? "ledger-narrative-input" : "h-8 overflow-hidden text-[13px] leading-5 whitespace-nowrap",
     money && "ledger-amount text-right tracking-tight",
     money && empty && "text-current/35",
     dirty && `rounded-sm ${editedMark}`,
@@ -419,7 +419,7 @@ export function ReviewStep({
   return (
     <ReviewEditContext.Provider value={editValue}>
       <main className="flex min-h-0 flex-1 flex-col bg-background">
-        <div className="flex shrink-0 flex-wrap items-center gap-2 bg-background px-3 py-1.5">
+        <div className="flex shrink-0 flex-nowrap items-center gap-3 overflow-x-auto bg-background px-3 py-1.5">
           <h1 ref={headingRef} tabIndex={-1} className="text-sm font-semibold outline-none">
             Review
           </h1>
@@ -429,12 +429,12 @@ export function ReviewStep({
           <Button variant="ghost" size="xs" onClick={onChangePdf}>
             Change PDF
           </Button>
-          <p aria-live="polite" className="text-xs text-muted-foreground">
+          <p aria-live="polite" className="shrink-0 text-xs text-muted-foreground">
             {status}
           </p>
-          <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+          <div className="ml-auto flex shrink-0 flex-nowrap items-center justify-end gap-2">
             {exportHint && (
-              <p id="export-hint" className="max-w-44 text-xs text-muted-foreground">
+              <p id="export-hint" className="sr-only">
                 {exportHint}
               </p>
             )}
@@ -459,7 +459,7 @@ export function ReviewStep({
         </div>
         {showRemember && (
           <form
-            className="flex flex-wrap items-center gap-2 bg-background px-3 py-1.5"
+            className="flex shrink-0 flex-nowrap items-center gap-3 overflow-x-auto bg-background px-3 py-1.5"
             onSubmit={(event) => {
               event.preventDefault();
               const next = layoutName.trim();
@@ -471,7 +471,7 @@ export function ReviewStep({
               setRememberDismissed(true);
             }}
           >
-            <p className="text-xs text-muted-foreground">{rememberPrompt}</p>
+          <p className="shrink-0 text-xs text-muted-foreground">{rememberPrompt}</p>
             <Input
               id="remember-layout-name"
               size="sm"
@@ -518,8 +518,8 @@ export function ReviewStep({
             ))}
           </div>
         )}
-        <div className="min-h-0 flex-1 overflow-auto">
-          <div aria-live="polite" className="px-4 pt-3 empty:hidden">
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+          <div aria-live="polite" className="shrink-0 px-4 pt-3 empty:hidden">
             {error && <p className="mb-2 text-sm text-destructive">{error}</p>}
             {loading && <p className="text-sm text-muted-foreground">Reading the selected tables…</p>}
             {!loading && !canExtract && (
@@ -535,6 +535,7 @@ export function ReviewStep({
                   : "No rows came out of those boxes. Go back and adjust them."}
               </p>
             )}
+            {saveError && <p className="mb-2 text-sm text-destructive">{saveError}</p>}
           </div>
           {hasRows && (
             <div className="ledger-sheet">
@@ -543,57 +544,62 @@ export function ReviewStep({
                   Rename a header. Hover a row to drop it. Amber is yours.
                 </p>
               )}
-              <Table className="ledger" containerClassName="overflow-visible">
-                <TableHeader>
-                  {table.getHeaderGroups().map((group) => (
-                    <TableRow key={group.id} className="border-0 hover:bg-transparent">
-                      {group.headers.map((header) => {
-                        const role = headerRole(header.id, names);
-                        const grow = header.id === growHeaderId;
-                        return (
-                          <TableHead
-                            key={header.id}
-                            className={cn(
-                              "h-auto min-w-0 py-2 align-bottom whitespace-normal text-foreground",
-                              role === "drop" ? "px-1" : "px-2.5",
-                              roleClass(role, grow),
-                              role === "money" && "text-right",
-                            )}
-                          >
-                            {header.isPlaceholder ? null : <table.FlexRender header={header} />}
-                          </TableHead>
-                        );
-                      })}
-                    </TableRow>
-                  ))}
-                </TableHeader>
-                <TableBody>
-                  {table.getRowModel().rows.map((row) => (
-                    <TableRow key={row.id} className="group/row border-0 hover:bg-transparent">
-                      {row.getAllCells().map((cell) => {
-                        const role = headerRole(cell.column.id, names);
-                        const grow = cell.column.id === growHeaderId;
-                        return (
-                          <TableCell
-                            key={cell.id}
-                            className={cn(
-                              "min-w-0 py-2 align-top leading-normal whitespace-normal",
-                              role === "drop" ? "px-1" : "px-2.5",
-                              roleClass(role, grow),
-                              role === "money" && "text-right",
-                            )}
-                          >
-                            <table.FlexRender cell={cell} />
-                          </TableCell>
-                        );
-                      })}
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+              <div className="ledger-scroll">
+                <Table className="ledger w-max min-w-full" containerClassName="overflow-visible w-max min-w-full">
+                  <TableHeader>
+                    {table.getHeaderGroups().map((group) => (
+                      <TableRow key={group.id} className="border-0 hover:bg-transparent">
+                        {group.headers.map((header) => {
+                          const role = headerRole(header.id, names);
+                          const grow = header.id === growHeaderId;
+                          const wrap = role === "narrative" || (grow && role === "plain");
+                          return (
+                            <TableHead
+                              key={header.id}
+                              className={cn(
+                                "h-auto py-2 align-bottom text-foreground",
+                                role === "drop" ? "px-1" : "px-2.5",
+                                wrap ? "min-w-0 whitespace-normal" : "whitespace-nowrap",
+                                roleClass(role, grow),
+                                role === "money" && "text-right",
+                              )}
+                            >
+                              {header.isPlaceholder ? null : <table.FlexRender header={header} />}
+                            </TableHead>
+                          );
+                        })}
+                      </TableRow>
+                    ))}
+                  </TableHeader>
+                  <TableBody>
+                    {table.getRowModel().rows.map((row) => (
+                      <TableRow key={row.id} className="group/row border-0 hover:bg-transparent">
+                        {row.getAllCells().map((cell) => {
+                          const role = headerRole(cell.column.id, names);
+                          const grow = cell.column.id === growHeaderId;
+                          const wrap = role === "narrative" || (grow && role === "plain");
+                          return (
+                            <TableCell
+                              key={cell.id}
+                              className={cn(
+                                "py-1.5 align-middle leading-normal",
+                                role === "drop" ? "px-1" : "px-2.5",
+                                wrap ? "min-w-0 whitespace-normal align-top" : "whitespace-nowrap",
+                                roleClass(role, grow),
+                                role === "money" && "text-right",
+                              )}
+                            >
+                              <table.FlexRender cell={cell} />
+                            </TableCell>
+                          );
+                        })}
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
             </div>
           )}
-          {saveError && <p className="mt-2 text-sm text-destructive">{saveError}</p>}
         </div>
       </main>
     </ReviewEditContext.Provider>

@@ -60,6 +60,14 @@ import type {
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerSrc;
 
+const ZOOM_MIN = 0.5;
+const ZOOM_MAX = 4;
+const ZOOM_STEP = 1.25;
+
+function clampZoom(value: number) {
+  return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(value * 100) / 100));
+}
+
 export default function App() {
   const [step, setStep] = useState<WizardStep>("upload");
   const [pdf, setPdf] = useState<OpenedPdf | null>(null);
@@ -79,10 +87,12 @@ export default function App() {
   const [activeTemplate, setActiveTemplate] = useState<StatementTemplate | null>(null);
   const [detectSample, setDetectSample] = useState("");
   const [layoutRemembered, setLayoutRemembered] = useState(false);
-  const [viewerWidth, setViewerWidth] = useState(720);
+  const [viewerBox, setViewerBox] = useState({ width: 0, height: 0 });
+  const [zoom, setZoom] = useState(1);
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const [pendingPdf, setPendingPdf] = useState<OpenedPdf | null>(null);
   const viewerRef = useRef<HTMLDivElement>(null);
+  const zoomRef = useRef(1);
   const stepHeadingRef = useRef<HTMLHeadingElement>(null);
   const passwordCallback = useRef<((password: string) => void) | null>(null);
   const autodetectedFor = useRef<string | null>(null);
@@ -105,6 +115,18 @@ export default function App() {
     () => suggestLayout(detectSample, pdf?.name),
     [detectSample, pdf?.name],
   );
+  const pageMetricsForView = pageMetrics[currentPage];
+  const pageWidth = useMemo(() => {
+    if (viewerBox.width <= 0 || viewerBox.height <= 0) return 0;
+    const pad = 16;
+    const availW = Math.max(80, viewerBox.width - pad);
+    const availH = Math.max(80, viewerBox.height - pad);
+    if (!pageMetricsForView?.pdfWidth || !pageMetricsForView.pdfHeight) {
+      return Math.max(80, Math.min(availW, availH)) * zoom;
+    }
+    const fitted = availH * (pageMetricsForView.pdfWidth / pageMetricsForView.pdfHeight);
+    return Math.max(80, Math.min(availW, fitted)) * zoom;
+  }, [viewerBox, pageMetricsForView, zoom]);
 
   useEffect(() => {
     void loadCustomTemplates().then(setCustomTemplates);
@@ -130,12 +152,81 @@ export default function App() {
     if (step !== "select") return;
     const node = viewerRef.current;
     if (!node) return;
-    const update = () => setViewerWidth(Math.max(280, node.clientWidth - 24));
+    const update = () => {
+      setViewerBox({ width: node.clientWidth, height: node.clientHeight });
+    };
     update();
     const observer = new ResizeObserver(update);
     observer.observe(node);
     return () => observer.disconnect();
-  }, [step]);
+  }, [step, pdfUrl, pageCount]);
+
+  useEffect(() => {
+    zoomRef.current = zoom;
+  }, [zoom]);
+
+  const applyZoom = useCallback((next: number, origin?: { x: number; y: number }) => {
+    const node = viewerRef.current;
+    const prev = zoomRef.current;
+    const clamped = clampZoom(next);
+    if (clamped === prev) return;
+    if (node) {
+      const rect = node.getBoundingClientRect();
+      const ox = origin ? origin.x - rect.left : rect.width / 2;
+      const oy = origin ? origin.y - rect.top : rect.height / 2;
+      const contentX = (node.scrollLeft + ox) / prev;
+      const contentY = (node.scrollTop + oy) / prev;
+      zoomRef.current = clamped;
+      setZoom(clamped);
+      requestAnimationFrame(() => {
+        node.scrollLeft = contentX * clamped - ox;
+        node.scrollTop = contentY * clamped - oy;
+      });
+      return;
+    }
+    zoomRef.current = clamped;
+    setZoom(clamped);
+  }, []);
+
+  useEffect(() => {
+    if (step !== "select") return;
+    const node = viewerRef.current;
+    if (!node) return;
+    let gestureStart = 1;
+    let usingGesture = false;
+    const onWheel = (event: WheelEvent) => {
+      if (usingGesture) return;
+      if (!event.ctrlKey && !event.metaKey) return;
+      event.preventDefault();
+      const dy = Math.max(-50, Math.min(50, event.deltaY));
+      const factor = Math.exp(-dy * 0.004);
+      applyZoom(zoomRef.current * factor, { x: event.clientX, y: event.clientY });
+    };
+    const onGestureStart = (event: Event) => {
+      event.preventDefault();
+      usingGesture = true;
+      gestureStart = zoomRef.current;
+    };
+    const onGestureChange = (event: Event) => {
+      event.preventDefault();
+      const scale = "scale" in event && typeof event.scale === "number" ? event.scale : 1;
+      applyZoom(gestureStart * scale);
+    };
+    const onGestureEnd = (event: Event) => {
+      event.preventDefault();
+      usingGesture = false;
+    };
+    node.addEventListener("wheel", onWheel, { passive: false });
+    node.addEventListener("gesturestart", onGestureStart);
+    node.addEventListener("gesturechange", onGestureChange);
+    node.addEventListener("gestureend", onGestureEnd);
+    return () => {
+      node.removeEventListener("wheel", onWheel);
+      node.removeEventListener("gesturestart", onGestureStart);
+      node.removeEventListener("gesturechange", onGestureChange);
+      node.removeEventListener("gestureend", onGestureEnd);
+    };
+  }, [step, pdfUrl, pageCount, applyZoom]);
 
   const clearWorkspace = () => {
     setPageCount(0);
@@ -151,6 +242,8 @@ export default function App() {
     setActiveTemplate(null);
     setDetectSample("");
     setLayoutRemembered(false);
+    setZoom(1);
+    zoomRef.current = 1;
     passwordCallback.current = null;
     autodetectedFor.current = null;
     pendingApply.current = null;
@@ -517,14 +610,18 @@ export default function App() {
             onAutodetect={() => void autodetect()}
             onContinue={() => setStep("review")}
             onChangePdf={() => void changePdf()}
+            zoom={zoom}
+            onZoomIn={() => applyZoom(zoomRef.current * ZOOM_STEP)}
+            onZoomOut={() => applyZoom(zoomRef.current / ZOOM_STEP)}
+            onZoomFit={() => applyZoom(1)}
           />
 
-          <div className="relative flex min-h-0 flex-1">
+          <div className="relative flex min-h-0 min-w-0 flex-1">
             {!pdfUrl ? (
               <p className="p-3 text-sm text-muted-foreground">Preparing PDF…</p>
             ) : (
               <Document
-                className="flex min-h-0 flex-1"
+                className="flex h-full min-h-0 min-w-0 flex-1 overflow-hidden"
                 file={pdfUrl}
                 loading={<p className="p-3 text-sm text-muted-foreground">Rendering statement…</p>}
                 onLoadSuccess={(doc) => {
@@ -559,7 +656,10 @@ export default function App() {
                     });
                   }}
                 />
-                <div ref={viewerRef} className="relative min-w-0 flex-1 overflow-auto bg-background">
+                <div
+                  ref={viewerRef}
+                  className="relative min-h-0 min-w-0 flex-1 overflow-auto overscroll-contain bg-background"
+                >
                   {selections.length === 0 && !busy && (
                     <p className="pointer-events-none absolute top-4 left-1/2 z-10 -translate-x-1/2 rounded-full border bg-card px-3 py-1.5 text-sm text-muted-foreground shadow-xs">
                       Drag a box around the transaction rows
@@ -570,16 +670,35 @@ export default function App() {
                       Include a page to continue
                     </p>
                   )}
-                  <div className="flex justify-center p-2">
-                    {pageCount > 0 && (
+                  <div
+                    className={cn(
+                      "flex p-2",
+                      zoom <= 1
+                        ? "min-h-full min-w-full items-center justify-center"
+                        : "w-max min-h-full",
+                    )}
+                  >
+                    {pageCount > 0 && pageWidth > 0 && (
                       <PdfPageView
                         pageNumber={currentPage}
-                        width={viewerWidth}
+                        width={pageWidth}
                         selections={selections}
                         defaultMethod={method}
                         onSelectionsChange={handleSelectionsChange}
                         onMetrics={(metrics) =>
-                          setPageMetrics((current) => ({ ...current, [currentPage]: metrics }))
+                          setPageMetrics((current) => {
+                            const prev = current[currentPage];
+                            if (
+                              prev &&
+                              prev.renderWidth === metrics.renderWidth &&
+                              prev.renderHeight === metrics.renderHeight &&
+                              prev.pdfWidth === metrics.pdfWidth &&
+                              prev.pdfHeight === metrics.pdfHeight
+                            ) {
+                              return current;
+                            }
+                            return { ...current, [currentPage]: metrics };
+                          })
                         }
                       />
                     )}
