@@ -621,9 +621,15 @@ jobs:
               echo "has_breaking=false" >> $GITHUB_OUTPUT
             fi
             echo "previous_version=$PREVIOUS_VERSION" >> $GITHUB_OUTPUT
+            if [ -n "$PREVIOUS_VERSION" ] && [ "$PREVIOUS_VERSION" != "0.0.0" ]; then
+              echo "compare_line=**Full changelog:** https://github.com/${{ github.repository }}/compare/v${PREVIOUS_VERSION}...v${VERSION}" >> $GITHUB_OUTPUT
+            else
+              echo "compare_line=" >> $GITHUB_OUTPUT
+            fi
           else
             echo "changelog=No changelog available." >> $GITHUB_OUTPUT
-            echo "previous_version=0.0.0" >> $GITHUB_OUTPUT
+            echo "previous_version=" >> $GITHUB_OUTPUT
+            echo "compare_line=" >> $GITHUB_OUTPUT
             echo "has_breaking=false" >> $GITHUB_OUTPUT
           fi
 
@@ -975,19 +981,24 @@ jobs:
             | Platform | Architecture | File |
             |----------|--------------|------|
             | Windows | x64 | [Installer (.exe)](https://github.com/${{ github.repository }}/releases/download/${{ needs.prepare-release.outputs.tag }}/PesaView_${{ needs.prepare-release.outputs.version }}_x64-setup.exe) |
+            | Windows | x64 | [Installer (.msi)](https://github.com/${{ github.repository }}/releases/download/${{ needs.prepare-release.outputs.tag }}/PesaView_${{ needs.prepare-release.outputs.version }}_x64_en-US.msi) |
             | macOS | Apple Silicon | [Disk image (.dmg)](https://github.com/${{ github.repository }}/releases/download/${{ needs.prepare-release.outputs.tag }}/PesaView_${{ needs.prepare-release.outputs.version }}_aarch64.dmg) |
             | macOS | Intel | [Disk image (.dmg)](https://github.com/${{ github.repository }}/releases/download/${{ needs.prepare-release.outputs.tag }}/PesaView_${{ needs.prepare-release.outputs.version }}_x64.dmg) |
-            | Linux | x64 | [Debian package (.deb)](https://github.com/${{ github.repository }}/releases/download/${{ needs.prepare-release.outputs.tag }}/pesaview_${{ needs.prepare-release.outputs.version }}_amd64.deb) |
-            | Linux | x64 | [AppImage](https://github.com/${{ github.repository }}/releases/download/${{ needs.prepare-release.outputs.tag }}/pesaview_${{ needs.prepare-release.outputs.version }}_amd64.AppImage) |
+            | Linux | x64 | [Debian package (.deb)](https://github.com/${{ github.repository }}/releases/download/${{ needs.prepare-release.outputs.tag }}/PesaView_${{ needs.prepare-release.outputs.version }}_amd64.deb) |
+            | Linux | x64 | [AppImage](https://github.com/${{ github.repository }}/releases/download/${{ needs.prepare-release.outputs.tag }}/PesaView_${{ needs.prepare-release.outputs.version }}_amd64.AppImage) |
+            | Linux | x64 | [RPM package (.rpm)](https://github.com/${{ github.repository }}/releases/download/${{ needs.prepare-release.outputs.tag }}/PesaView-${{ needs.prepare-release.outputs.version }}-1.x86_64.rpm) |
+
+            Ignore `.sig`, `.app.tar.gz`, and `latest.json` — those are for in-app updates, not manual installs.
 
             Built `${{ steps.timestamp.outputs.build_time }}`. Installed copies can update automatically when this release is available.
 
-            **Full changelog:** https://github.com/${{ github.repository }}/compare/v${{ steps.changelog.outputs.previous_version || '0.0.0' }}...v${{ needs.prepare-release.outputs.version }}
+            ${{ steps.changelog.outputs.compare_line }}
           draft: false
           prerelease: false
           files: |
             src-tauri/target/*/release/bundle/dmg/*.dmg
             src-tauri/target/*/release/bundle/deb/*.deb
+            src-tauri/target/*/release/bundle/rpm/*.rpm
             src-tauri/target/*/release/bundle/appimage/*.AppImage
             src-tauri/target/*/release/bundle/nsis/*.exe
             src-tauri/target/*/release/bundle/msi/*.msi
@@ -998,9 +1009,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # Step 5: Generate and upload updater JSON
+  # Step 5: Checksums, release notes, and updater JSON
   generate-updater-json:
-    name: "Generate Updater JSON"
+    name: "Publish Release Metadata"
     needs:
       [
         check-release,
@@ -1014,70 +1025,173 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.prepare-release.outputs.tag }}
+          fetch-depth: 0
 
-      - name: Generate and upload latest.json
+      - name: Publish checksums, notes, and latest.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.prepare-release.outputs.version }}
+          TAG: ${{ needs.prepare-release.outputs.tag }}
+          REPO: ${{ github.repository }}
         run: |
-          echo "🔄 Generating latest.json for Tauri updater..."
+          set -euo pipefail
 
-          VERSION="${{ needs.prepare-release.outputs.version }}"
-          TAG="${{ needs.prepare-release.outputs.tag }}"
+          echo "Publishing release metadata for $TAG"
 
-          # Create the latest.json file with proper Tauri updater format
-          # Try to get release notes from the GitHub API
-          RELEASE_NOTES="Update to version $VERSION. See full release notes at https://github.com/${{ github.repository }}/releases/tag/$TAG"
-
-          # Try to fetch release notes from GitHub API
-          if command -v gh &> /dev/null; then
-            GITHUB_NOTES=$(gh api repos/${{ github.repository }}/releases/latest --jq '.body' 2>/dev/null || echo "")
-            if [ -n "$GITHUB_NOTES" ] && [ "$GITHUB_NOTES" != "null" ]; then
-              RELEASE_NOTES=$(printf '%s' "$GITHUB_NOTES" | head -20 | sed 's/^## /## /g' | sed 's/^### /### /g' | LC_ALL=C tr -d '\000-\011\013-\037\177')
-            fi
+          CHANGELOG_CONTENT=""
+          if [ -f CHANGELOG.md ]; then
+            CHANGELOG_CONTENT=$(awk -v version="$VERSION" '
+              /^## / {
+                if (found) exit
+                if ($0 ~ "## .*" version) found=1
+                next
+              }
+              found && /^## / { exit }
+              found && /^### / { next }
+              found { print }
+            ' CHANGELOG.md | sed '/^[[:space:]]*$/d')
+          fi
+          if [ -z "$CHANGELOG_CONTENT" ]; then
+            CHANGELOG_CONTENT="Update to version $VERSION."
           fi
 
-          # Wait for GitHub to process release assets
-          sleep 10
+          PREV_TAG=$(git describe --tags --abbrev=0 --match 'v*' "${TAG}^" 2>/dev/null || true)
 
-          # Download signature files from the release
-          # macOS updater archives are arch-specific (see "Rename macOS updater artifacts")
+          sleep 10
+          ASSETS_JSON=$(gh release view "$TAG" --json assets)
+
           mkdir -p signatures
+          MISSING_SIG=0
           for sig_file in \
             "PesaView-aarch64.app.tar.gz.sig" \
             "PesaView-x86_64.app.tar.gz.sig" \
-            "pesaview_${VERSION}_amd64.AppImage.sig" \
+            "PesaView_${VERSION}_amd64.AppImage.sig" \
             "PesaView_${VERSION}_x64-setup.exe.sig"
           do
-            gh release download "$TAG" -p "$sig_file" -D signatures 2>/dev/null || echo "" > "signatures/$sig_file"
+            if gh release download "$TAG" -p "$sig_file" -D signatures; then
+              echo "Downloaded $sig_file"
+            else
+              echo "Missing required signature: $sig_file"
+              MISSING_SIG=1
+            fi
           done
-
-          # Read signature files
-          # Tauri v2 uses updater bundle signatures, not installer signatures
-          DARWIN_AARCH64_SIG=$(cat signatures/PesaView-aarch64.app.tar.gz.sig 2>/dev/null || echo "")
-          DARWIN_X86_64_SIG=$(cat signatures/PesaView-x86_64.app.tar.gz.sig 2>/dev/null || echo "")
-          LINUX_X86_64_SIG=$(cat signatures/pesaview_${VERSION}_amd64.AppImage.sig 2>/dev/null || echo "")
-          WINDOWS_X86_64_SIG=$(cat signatures/PesaView_${VERSION}_x64-setup.exe.sig 2>/dev/null || echo "")
-
-          if [ -z "$DARWIN_AARCH64_SIG" ] || [ -z "$DARWIN_X86_64_SIG" ]; then
-            echo "❌ Missing macOS updater signature(s)"
-            echo "  aarch64 sig present: $([ -n "$DARWIN_AARCH64_SIG" ] && echo yes || echo no)"
-            echo "  x86_64 sig present: $([ -n "$DARWIN_X86_64_SIG" ] && echo yes || echo no)"
+          if [ "$MISSING_SIG" -ne 0 ]; then
             echo "Release assets:"
-            gh release view "$TAG" --json assets --jq '.assets[].name' || true
+            echo "$ASSETS_JSON" | jq -r '.assets[].name'
             exit 1
           fi
 
-          # Use jq to properly create JSON with escaped strings
-          # URLs point to updater bundles (.tar.gz, .zip), not installers
+          DARWIN_AARCH64_SIG=$(cat "signatures/PesaView-aarch64.app.tar.gz.sig")
+          DARWIN_X86_64_SIG=$(cat "signatures/PesaView-x86_64.app.tar.gz.sig")
+          LINUX_X86_64_SIG=$(cat "signatures/PesaView_${VERSION}_amd64.AppImage.sig")
+          WINDOWS_X86_64_SIG=$(cat "signatures/PesaView_${VERSION}_x64-setup.exe.sig")
+
+          for sig_name in DARWIN_AARCH64_SIG DARWIN_X86_64_SIG LINUX_X86_64_SIG WINDOWS_X86_64_SIG; do
+            if [ -z "${!sig_name}" ]; then
+              echo "Empty signature: $sig_name"
+              echo "Release assets:"
+              echo "$ASSETS_JSON" | jq -r '.assets[].name'
+              exit 1
+            fi
+          done
+
+          : > SHA256SUMS
+          for file in \
+            "PesaView_${VERSION}_x64-setup.exe" \
+            "PesaView_${VERSION}_x64_en-US.msi" \
+            "PesaView_${VERSION}_aarch64.dmg" \
+            "PesaView_${VERSION}_x64.dmg" \
+            "PesaView_${VERSION}_amd64.deb" \
+            "PesaView_${VERSION}_amd64.AppImage" \
+            "PesaView-${VERSION}-1.x86_64.rpm"
+          do
+            digest=$(echo "$ASSETS_JSON" | jq -r --arg n "$file" '.assets[] | select(.name==$n) | .digest // empty')
+            if [ -z "$digest" ]; then
+              echo "Skipping checksums for missing asset: $file"
+              continue
+            fi
+            echo "${digest#sha256:}  $file" >> SHA256SUMS
+          done
+          LC_ALL=C sort -k2 -o SHA256SUMS SHA256SUMS
+
+          if [ ! -s SHA256SUMS ]; then
+            echo "SHA256SUMS is empty"
+            exit 1
+          fi
+          echo "SHA256SUMS:"
+          cat SHA256SUMS
+          gh release upload "$TAG" SHA256SUMS --clobber
+
+          asset_exists() {
+            echo "$ASSETS_JSON" | jq -e --arg n "$1" '.assets[] | select(.name==$n)' >/dev/null
+          }
+
+          asset_size() {
+            local bytes
+            bytes=$(echo "$ASSETS_JSON" | jq -r --arg n "$1" '.assets[] | select(.name==$n) | .size')
+            python3 -c "print(f'{int($bytes)/1024/1024:.1f} MB')"
+          }
+
+          asset_short_sha() {
+            local digest
+            digest=$(echo "$ASSETS_JSON" | jq -r --arg n "$1" '.assets[] | select(.name==$n) | .digest')
+            echo "${digest#sha256:}" | cut -c1-12
+          }
+
+          row() {
+            local platform="$1" arch="$2" label="$3" file="$4"
+            if asset_exists "$file"; then
+              printf '| %s | %s | [%s](%s) | %s | `%s` |\n' \
+                "$platform" "$arch" "$label" \
+                "https://github.com/${REPO}/releases/download/${TAG}/${file}" \
+                "$(asset_size "$file")" "$(asset_short_sha "$file")"
+            fi
+          }
+
+          {
+            echo "## Changes"
+            echo
+            printf '%s\n' "$CHANGELOG_CONTENT"
+            echo
+            echo "## Downloads"
+            echo
+            echo "| Platform | Architecture | File | Size | SHA256 |"
+            echo "|----------|--------------|------|------|--------|"
+            row "Windows" "x64" "Installer (.exe)" "PesaView_${VERSION}_x64-setup.exe"
+            row "Windows" "x64" "Installer (.msi)" "PesaView_${VERSION}_x64_en-US.msi"
+            row "macOS" "Apple Silicon" "Disk image (.dmg)" "PesaView_${VERSION}_aarch64.dmg"
+            row "macOS" "Intel" "Disk image (.dmg)" "PesaView_${VERSION}_x64.dmg"
+            row "Linux" "x64" "Debian package (.deb)" "PesaView_${VERSION}_amd64.deb"
+            row "Linux" "x64" "AppImage" "PesaView_${VERSION}_amd64.AppImage"
+            row "Linux" "x64" "RPM package (.rpm)" "PesaView-${VERSION}-1.x86_64.rpm"
+            echo
+            echo "Checksums: [\`SHA256SUMS\`](https://github.com/${REPO}/releases/download/${TAG}/SHA256SUMS)"
+            echo
+            echo "Ignore \`.sig\`, \`.app.tar.gz\`, and \`latest.json\` — those are for in-app updates, not manual installs."
+            echo
+            echo "Built \`$(date -u +"%Y-%m-%d %H:%M UTC")\`. Installed copies can update automatically when this release is available."
+            if [ -n "$PREV_TAG" ]; then
+              echo
+              echo "**Full changelog:** https://github.com/${REPO}/compare/${PREV_TAG}...${TAG}"
+            fi
+          } > release-notes.md
+
+          gh release edit "$TAG" --notes-file release-notes.md
+          echo "Release notes updated"
+
           jq -n \
             --arg version "$VERSION" \
-            --arg notes "$RELEASE_NOTES" \
+            --arg notes "$CHANGELOG_CONTENT" \
             --arg pub_date "$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")" \
-            --arg darwin_aarch64_url "https://github.com/${{ github.repository }}/releases/download/$TAG/PesaView-aarch64.app.tar.gz" \
+            --arg darwin_aarch64_url "https://github.com/${REPO}/releases/download/$TAG/PesaView-aarch64.app.tar.gz" \
             --arg darwin_aarch64_sig "$DARWIN_AARCH64_SIG" \
-            --arg darwin_x86_64_url "https://github.com/${{ github.repository }}/releases/download/$TAG/PesaView-x86_64.app.tar.gz" \
+            --arg darwin_x86_64_url "https://github.com/${REPO}/releases/download/$TAG/PesaView-x86_64.app.tar.gz" \
             --arg darwin_x86_64_sig "$DARWIN_X86_64_SIG" \
-            --arg linux_x86_64_url "https://github.com/${{ github.repository }}/releases/download/$TAG/pesaview_${VERSION}_amd64.AppImage" \
+            --arg linux_x86_64_url "https://github.com/${REPO}/releases/download/$TAG/PesaView_${VERSION}_amd64.AppImage" \
             --arg linux_x86_64_sig "$LINUX_X86_64_SIG" \
-            --arg windows_x86_64_url "https://github.com/${{ github.repository }}/releases/download/$TAG/PesaView_${VERSION}_x64-setup.exe" \
+            --arg windows_x86_64_url "https://github.com/${REPO}/releases/download/$TAG/PesaView_${VERSION}_x64-setup.exe" \
             --arg windows_x86_64_sig "$WINDOWS_X86_64_SIG" \
             '{
               version: $version,
@@ -1103,14 +1217,11 @@ jobs:
               }
             }' > latest.json
 
-          echo "📄 Generated latest.json:"
-          jq '{version, platforms: (.platforms | keys), urls: (.platforms | map_values(.url))}' latest.json
+          echo "Generated latest.json:"
+          jq '{version, platforms: (.platforms | map_values(.url))}' latest.json
 
-          # Upload to the release
           gh release upload "$TAG" latest.json --clobber
-          echo "✅ latest.json uploaded"
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          echo "latest.json uploaded"
 
   # Step 6: Notify about release completion
   notify-completion:
@@ -1141,7 +1252,7 @@ jobs:
           - [x] Git tag created: ${{ needs.prepare-release.outputs.tag }}
           - [x] Desktop binaries built for all platforms
           - [x] GitHub release created
-          - [x] Updater JSON generated
+          - [x] Checksums, notes, and updater JSON published
 
           ## 📊 Build Status
           - **Trigger**: Manual workflow dispatch
@@ -1152,13 +1263,16 @@ jobs:
           ## 🔗 Links
           - **Release**: https://github.com/${{ github.repository }}/releases/tag/${{ needs.prepare-release.outputs.tag }}
           - **Updater JSON**: https://github.com/${{ github.repository }}/releases/download/${{ needs.prepare-release.outputs.tag }}/latest.json
+          - **Checksums**: https://github.com/${{ github.repository }}/releases/download/${{ needs.prepare-release.outputs.tag }}/SHA256SUMS
 
           ## 📱 Available Downloads
           - Windows x64: [Download .exe](https://github.com/${{ github.repository }}/releases/download/${{ needs.prepare-release.outputs.tag }}/PesaView_${{ needs.prepare-release.outputs.version }}_x64-setup.exe)
+          - Windows x64: [Download .msi](https://github.com/${{ github.repository }}/releases/download/${{ needs.prepare-release.outputs.tag }}/PesaView_${{ needs.prepare-release.outputs.version }}_x64_en-US.msi)
           - macOS Apple Silicon: [Download .dmg](https://github.com/${{ github.repository }}/releases/download/${{ needs.prepare-release.outputs.tag }}/PesaView_${{ needs.prepare-release.outputs.version }}_aarch64.dmg)
           - macOS Intel: [Download .dmg](https://github.com/${{ github.repository }}/releases/download/${{ needs.prepare-release.outputs.tag }}/PesaView_${{ needs.prepare-release.outputs.version }}_x64.dmg)
-          - Linux x64: [Download .deb](https://github.com/${{ github.repository }}/releases/download/${{ needs.prepare-release.outputs.tag }}/pesaview_${{ needs.prepare-release.outputs.version }}_amd64.deb)
-          - Linux Portable: [Download .AppImage](https://github.com/${{ github.repository }}/releases/download/${{ needs.prepare-release.outputs.tag }}/pesaview_${{ needs.prepare-release.outputs.version }}_amd64.AppImage)
+          - Linux x64: [Download .deb](https://github.com/${{ github.repository }}/releases/download/${{ needs.prepare-release.outputs.tag }}/PesaView_${{ needs.prepare-release.outputs.version }}_amd64.deb)
+          - Linux Portable: [Download .AppImage](https://github.com/${{ github.repository }}/releases/download/${{ needs.prepare-release.outputs.tag }}/PesaView_${{ needs.prepare-release.outputs.version }}_amd64.AppImage)
+          - Linux x64: [Download .rpm](https://github.com/${{ github.repository }}/releases/download/${{ needs.prepare-release.outputs.tag }}/PesaView-${{ needs.prepare-release.outputs.version }}-1.x86_64.rpm)
 
           ---
 
