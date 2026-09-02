@@ -291,6 +291,15 @@ jobs:
           security import certificate.p12 -k build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" build.keychain
 
+          echo "Signing identities in build.keychain:"
+          security find-identity -v -p codesigning build.keychain
+
+          if ! security find-identity -v -p codesigning build.keychain | grep -q "Developer ID Application"; then
+            echo "❌ No Developer ID Application identity in APPLE_CERTIFICATE."
+            echo "Export a .p12 that contains Developer ID Application (not Apple Development)."
+            exit 1
+          fi
+
           # Clean up
           rm certificate.p12
         env:
@@ -661,6 +670,15 @@ jobs:
                 export LD_LIBRARY_PATH="$PWD/$JRE_LIB:${LD_LIBRARY_PATH}"
               done
             fi
+          fi
+
+          # Tauri re-imports APPLE_CERTIFICATE into a temp keychain and picks
+          # the first identity alphabetically. A mixed .p12 that also contains
+          # "Apple Development" then fails the identity check against
+          # Developer ID Application. Certs are already in build.keychain, so
+          # sign with TAURI_BUNDLE_MACOS_SIGNING_IDENTITY from that keychain.
+          if [[ "${{ matrix.platform }}" == "macos-latest" ]]; then
+            unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD
           fi
 
           # Build with retry logic
