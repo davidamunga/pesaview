@@ -22,14 +22,15 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: lts/*
+          package-manager-cache: false
 
       - name: Get version
         id: version
@@ -58,15 +59,16 @@ jobs:
     outputs:
       validation_passed: ${{ steps.validate.outputs.passed }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: lts/*
+          package-manager-cache: false
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v5
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -147,17 +149,18 @@ jobs:
       version: ${{ needs.check-release.outputs.version }}
       tag: ${{ needs.check-release.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: lts/*
+          package-manager-cache: false
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v5
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -235,16 +238,17 @@ jobs:
 
     runs-on: ${{ matrix.platform }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ needs.prepare-release.outputs.tag }}
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: lts/*
+          package-manager-cache: false
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v5
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -275,6 +279,9 @@ jobs:
       - name: Install create-dmg (macOS)
         if: matrix.platform == 'macos-latest'
         run: |
+          # GitHub's macOS image ships aws/tap; Homebrew 6 warns until it is trusted
+          # or removed. We only need create-dmg from homebrew/core.
+          brew untap aws/tap 2>/dev/null || true
           brew install create-dmg
 
       - name: Import Apple Code Signing Certificate
@@ -333,7 +340,7 @@ jobs:
 
       - name: Cache pnpm dependencies
         if: matrix.platform != 'windows-latest'
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
           key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
@@ -342,7 +349,7 @@ jobs:
 
       - name: Cache Rust dependencies
         if: matrix.platform != 'windows-latest'
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -352,7 +359,7 @@ jobs:
             ${{ runner.os }}-${{ matrix.target }}-cargo-
             ${{ runner.os }}-cargo-
       - name: Cache JRE for Tabula
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             src-tauri/resources/build-jre
@@ -952,7 +959,7 @@ jobs:
 
       - name: Create GitHub Release
         if: steps.tauri-build.outputs.build_success == 'true'
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.prepare-release.outputs.tag }}
           name: "PesaView ${{ needs.prepare-release.outputs.tag }}"
@@ -1006,7 +1013,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Generate and upload latest.json
         run: |

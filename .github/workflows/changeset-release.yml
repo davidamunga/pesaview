@@ -29,7 +29,7 @@ jobs:
       has_changesets: ${{ steps.check.outputs.has_changesets }}
       changeset_count: ${{ steps.check.outputs.changeset_count }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
@@ -61,18 +61,19 @@ jobs:
     needs: check-changesets
     if: needs.check-changesets.outputs.has_changesets == 'true'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: lts/*
+          package-manager-cache: false
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v5
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
