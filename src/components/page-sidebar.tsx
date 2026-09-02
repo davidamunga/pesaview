@@ -25,7 +25,7 @@ export function PageSidebar({
   const includedCount = pageCount - excludedPages.size;
 
   return (
-    <aside className="flex h-full w-32 shrink-0 flex-col border-r bg-card">
+    <aside className="flex h-full w-28 shrink-0 flex-col border-r bg-card">
       <div className="flex-1 space-y-2 overflow-y-auto p-1.5">
         {Array.from({ length: pageCount }, (_, index) => {
           const page = index + 1;
@@ -54,7 +54,7 @@ export function PageSidebar({
                 <div className="relative overflow-hidden rounded-[3px] bg-muted">
                   <Page
                     pageNumber={page}
-                    width={96}
+                    width={88}
                     renderAnnotationLayer={false}
                     renderTextLayer={false}
                   />
@@ -62,8 +62,8 @@ export function PageSidebar({
                     pageSelections.map((selection) => {
                       const box = pdfToCss(selection, {
                         ...metrics,
-                        renderWidth: 96,
-                        renderHeight: (96 / metrics.pdfWidth) * metrics.pdfHeight,
+                        renderWidth: 88,
+                        renderHeight: (88 / metrics.pdfWidth) * metrics.pdfHeight,
                       });
                       return (
                         <span
@@ -85,11 +85,11 @@ export function PageSidebar({
                 <button
                   type="button"
                   disabled={lastIncluded}
-                  title={lastIncluded ? "Keep at least one page" : undefined}
+                  title={lastIncluded ? "Keep at least one page" : excluded ? "Include this page" : "Skip this page"}
                   className="min-h-8 min-w-11 px-1.5 text-xs text-muted-foreground underline-offset-2 outline-none hover:text-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:no-underline disabled:opacity-100 disabled:text-muted-foreground"
                   onClick={() => onExclude(page)}
                 >
-                  {excluded ? "Include" : lastIncluded ? "Keep one page" : "Skip page"}
+                  {excluded ? "Include" : lastIncluded ? "Keep" : "Skip"}
                 </button>
               </div>
             </div>

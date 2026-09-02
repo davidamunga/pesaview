@@ -1,5 +1,5 @@
 import type { RefObject } from "react";
-import { Check, CircleX, Redo2, Undo2, Zap } from "lucide-react";
+import { Check, CircleX, Minus, Plus, Redo2, Undo2, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { TemplatesMenu } from "@/components/templates-menu";
 import {
@@ -36,6 +36,10 @@ interface SelectToolbarProps {
   onAutodetect: () => void;
   onContinue: () => void;
   onChangePdf: () => void;
+  zoom: number;
+  onZoomIn: () => void;
+  onZoomOut: () => void;
+  onZoomFit: () => void;
   headingRef?: RefObject<HTMLHeadingElement | null>;
 }
 
@@ -58,10 +62,14 @@ export function SelectToolbar({
   onAutodetect,
   onContinue,
   onChangePdf,
+  zoom,
+  onZoomIn,
+  onZoomOut,
+  onZoomFit,
   headingRef,
 }: SelectToolbarProps) {
   return (
-    <div className="flex shrink-0 flex-wrap items-center gap-2 bg-background px-3 py-1.5">
+    <div className="flex shrink-0 flex-nowrap items-center gap-2.5 overflow-x-auto bg-background px-3 py-1.5">
       {headingRef ? (
         <h1 ref={headingRef} tabIndex={-1} className="sr-only outline-none">
           Select tables
@@ -92,10 +100,41 @@ export function SelectToolbar({
         <Redo2 />
         Redo
       </Button>
+      <div className="flex items-center gap-0.5">
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          disabled={zoom <= 0.5}
+          title="Zoom out"
+          aria-label="Zoom out"
+          onClick={onZoomOut}
+        >
+          <Minus />
+        </Button>
+        <button
+          type="button"
+          title="Fit page"
+          aria-label={zoom === 1 ? "Page is fitted" : "Fit page"}
+          className="h-7 min-w-11 rounded-md px-1 text-xs tabular-nums text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+          onClick={onZoomFit}
+        >
+          {Math.round(zoom * 100) === 100 ? "Fit" : `${Math.round(zoom * 100)}%`}
+        </button>
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          disabled={zoom >= 4}
+          title="Zoom in"
+          aria-label="Zoom in"
+          onClick={onZoomIn}
+        >
+          <Plus />
+        </Button>
+      </div>
       {method === "lattice" && (
         <p className="text-xs text-muted-foreground">Using ruled lines</p>
       )}
-      <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+      <div className="ml-auto flex shrink-0 flex-nowrap items-center justify-end gap-2">
         <TemplatesMenu
           templates={templates}
           disabled={busy}
@@ -106,8 +145,8 @@ export function SelectToolbar({
         <DropdownMenu>
           <DropdownMenuTrigger
             render={
-              <Button variant="ghost" size="xs" disabled={busy}>
-                If columns look wrong
+              <Button variant="ghost" size="xs" disabled={busy} title="If columns look wrong">
+                Columns
               </Button>
             }
           />
@@ -138,7 +177,7 @@ export function SelectToolbar({
           </Button>
         )}
         {!canContinue && (
-          <p id="continue-hint" className="max-w-40 text-xs text-muted-foreground">
+          <p id="continue-hint" className="sr-only">
             {continueHint}
           </p>
         )}

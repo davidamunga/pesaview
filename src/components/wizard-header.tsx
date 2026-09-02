@@ -28,9 +28,9 @@ export function WizardHeader({ step, canSelect, canReview, fileName, onStep }: W
   return (
     <header
       data-tauri-drag-region
-      className="window-chrome grid h-14 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-4 bg-chrome select-none shadow-[inset_0_-1px_0_0_color-mix(in_oklch,var(--foreground)_8%,transparent)]"
+      className="window-chrome grid h-14 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-6 bg-chrome select-none shadow-[inset_0_-1px_0_0_color-mix(in_oklch,var(--foreground)_8%,transparent)]"
     >
-      <div className="flex min-w-0 items-center gap-2.5 pl-3">
+      <div className="flex min-w-0 items-center gap-3 pl-3">
         <PesaViewLogo className="size-7 shrink-0" />
         <p className="shrink-0 text-base leading-none font-semibold tracking-tight">PesaView</p>
         {fileName ? (
@@ -38,14 +38,14 @@ export function WizardHeader({ step, canSelect, canReview, fileName, onStep }: W
             <span className="text-muted-foreground/40 leading-none" aria-hidden>
               ·
             </span>
-            <p className="min-w-0 truncate text-sm leading-none text-muted-foreground" title={fileName}>
+            <p className="min-w-0 max-w-40 truncate text-sm leading-none text-muted-foreground" title={fileName}>
               {fileName}
             </p>
           </>
         ) : null}
       </div>
 
-      <nav aria-label="Steps" className="flex shrink-0 items-center gap-6">
+      <nav aria-label="Steps" className="flex shrink-0 items-center gap-7">
         {STEPS.map((item) => {
           const active = step === item.id;
           const enabled = unlocked[item.id];
@@ -56,7 +56,7 @@ export function WizardHeader({ step, canSelect, canReview, fileName, onStep }: W
               disabled={!enabled}
               aria-current={active ? "step" : undefined}
               className={cn(
-                "flex h-7 items-center gap-2 outline-none transition",
+                "flex h-7 items-center gap-2.5 px-0.5 outline-none transition",
                 "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-chrome",
                 enabled && !active && "text-muted-foreground hover:text-foreground",
                 !enabled && "cursor-not-allowed text-muted-foreground/40",
@@ -71,7 +71,7 @@ export function WizardHeader({ step, canSelect, canReview, fileName, onStep }: W
         })}
       </nav>
 
-      <div className="flex h-7 items-center justify-end gap-0.5 pr-3">
+      <div className="flex h-7 items-center justify-end gap-1.5 pr-4">
         <UpdateChecker showButton />
         <ThemeToggle />
       </div>
