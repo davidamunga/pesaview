@@ -1,5 +1,11 @@
 # pesaview
 
+## 0.2.0
+
+### Minor Changes
+
+- [#3](https://github.com/davidamunga/pesaview/pull/3) [`60932f7`](https://github.com/davidamunga/pesaview/commit/60932f7dc58f458c6a27e91a2d94d3e5ed79fa73) Thanks [@davidamunga](https://github.com/davidamunga)! - Fit statements to compact windows, add pinch and button zoom, and make the review grid scroll on the same green surface as the rest of the app.
+
 ## 0.1.2
 
 ### Patch Changes
