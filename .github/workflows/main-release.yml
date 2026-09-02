@@ -294,11 +294,29 @@ jobs:
           echo "Signing identities in build.keychain:"
           security find-identity -v -p codesigning build.keychain
 
-          if ! security find-identity -v -p codesigning build.keychain | grep -q "Developer ID Application"; then
+          CHOSEN=$(security find-identity -v -p codesigning build.keychain | awk '/Developer ID Application:/ { print $2; exit }')
+          if [ -z "$CHOSEN" ]; then
             echo "❌ No Developer ID Application identity in APPLE_CERTIFICATE."
             echo "Export a .p12 that contains Developer ID Application (not Apple Development)."
             exit 1
           fi
+
+          # A mixed .p12 often has Apple Development plus two Developer ID
+          # certs with the same name. codesign then fails with "ambiguous".
+          # Keep one Developer ID Application and sign by SHA-1 hash.
+          echo "Using Developer ID Application identity $CHOSEN"
+          echo "MACOS_CODESIGN_IDENTITY=$CHOSEN" >> "$GITHUB_ENV"
+
+          while read -r HASH; do
+            [ -z "$HASH" ] && continue
+            if [ "$HASH" != "$CHOSEN" ]; then
+              echo "Removing extra codesigning identity $HASH"
+              security delete-certificate -Z "$HASH" build.keychain || true
+            fi
+          done < <(security find-identity -p codesigning build.keychain | grep -Eo '[A-F0-9]{40}' | sort -u)
+
+          echo "Remaining signing identities:"
+          security find-identity -v -p codesigning build.keychain
 
           # Clean up
           rm certificate.p12
@@ -645,7 +663,7 @@ jobs:
 
           echo "✅ Re-signing complete: $SIGNED signed, $FAILED failed"
         env:
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_SIGNING_IDENTITY: ${{ env.MACOS_CODESIGN_IDENTITY }}
 
       - name: Build Tauri app
         id: tauri-build
@@ -711,11 +729,11 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_SIGNING_IDENTITY: ${{ env.MACOS_CODESIGN_IDENTITY || secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          TAURI_BUNDLE_MACOS_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          TAURI_BUNDLE_MACOS_SIGNING_IDENTITY: ${{ env.MACOS_CODESIGN_IDENTITY || secrets.APPLE_SIGNING_IDENTITY }}
           CI: true
 
       - name: Verify JRE bundling (Windows)
