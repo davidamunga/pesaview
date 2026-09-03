@@ -1,6 +1,6 @@
 [package]
 name = "pesaview"
-version = "0.2.0"
+version = "0.2.1"
 description = "Extract tables from bank and M-PESA statement PDFs"
 authors = ["David Amunga"]
 edition = "2021"
