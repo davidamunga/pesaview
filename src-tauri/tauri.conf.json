@@ -16,7 +16,7 @@
         "hiddenTitle": true,
         "titleBarStyle": "Overlay",
         "backgroundColor": "#efeee9",
-        "width": 800,
+        "width": 960,
         "height": 560,
         "minWidth": 800,
         "minHeight": 560,

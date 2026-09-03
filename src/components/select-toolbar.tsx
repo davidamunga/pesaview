@@ -167,7 +167,7 @@ export function SelectToolbar({
         {canAutodetect && (
           <Button variant="outline" size="xs" disabled={busy} onClick={onAutodetect}>
             <Zap />
-            Autodetect
+            {busy ? "Finding…" : "Autodetect"}
           </Button>
         )}
         {selectionCount > 0 && (
