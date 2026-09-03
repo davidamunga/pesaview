@@ -1,5 +1,15 @@
 # pesaview
 
+## 0.2.1
+
+### Patch Changes
+
+- [#6](https://github.com/davidamunga/pesaview/pull/6) [`8d834f7`](https://github.com/davidamunga/pesaview/commit/8d834f77479791621e7da98d9f96f400306dc4de) Thanks [@davidamunga](https://github.com/davidamunga)! - Find rows in Review from the toolbar or ⌘F. Export still writes the full statement.
+
+- [#6](https://github.com/davidamunga/pesaview/pull/6) [`0086177`](https://github.com/davidamunga/pesaview/commit/0086177e5e722c336fbbfbe9f6d2b36d9353035e) Thanks [@davidamunga](https://github.com/davidamunga)! - Unlock password-protected statements and show when tables are being found.
+
+- [#6](https://github.com/davidamunga/pesaview/pull/6) [`e662c5e`](https://github.com/davidamunga/pesaview/commit/e662c5ef324ce4bc7fb7e676f82de2683fce4b1c) Thanks [@davidamunga](https://github.com/davidamunga)! - Open at 960px so the review ledger can show particulars and amounts together.
+
 ## 0.2.0
 
 ### Minor Changes
