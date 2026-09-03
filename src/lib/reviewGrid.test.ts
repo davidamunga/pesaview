@@ -10,6 +10,7 @@ import {
   isNarrativeColumn,
   projectReview,
   reviewToTables,
+  rowMatchesQuery,
   tablesToReview,
 } from "./reviewGrid";
 
@@ -100,6 +101,16 @@ describe("reviewGrid", () => {
     expect(isDateColumn("Date")).toBe(true);
     expect(isDateColumn("Value Date")).toBe(true);
     expect(isDateColumn("Debit")).toBe(false);
+  });
+
+  it("finds a row by page, story, or amount without commas", () => {
+    const row = { id: "1", page: 3, cells: ["03-11-2025", "VISA-TWILIO INC", "1,335.46"] };
+    expect(rowMatchesQuery(row, "")).toBe(true);
+    expect(rowMatchesQuery(row, "  ")).toBe(true);
+    expect(rowMatchesQuery(row, "twilio")).toBe(true);
+    expect(rowMatchesQuery(row, "1335")).toBe(true);
+    expect(rowMatchesQuery(row, "3")).toBe(true);
+    expect(rowMatchesQuery(row, "GOOG")).toBe(false);
   });
 
   it("labels a dropped row from date and particulars", () => {

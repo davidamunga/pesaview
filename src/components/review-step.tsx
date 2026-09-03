@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type RefObject } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { createColumnHelper, tableFeatures, useTable } from "@tanstack/react-table";
 import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -15,12 +15,17 @@ import {
   isNarrativeColumn,
   projectReview,
   reviewToTables,
+  rowMatchesQuery,
   tablesToReview,
   type ColumnSuspect,
 } from "@/lib/reviewGrid";
 import { cn } from "@/lib/utils";
 import { exportCsv, exportXlsx } from "@/services/exportService";
 import type { ExtractedTable, ReviewRow } from "@/types";
+
+const apple =
+  typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.userAgent);
+const findShortcut = apple ? "⌘F" : "Ctrl+F";
 
 const features = tableFeatures({});
 const helper = createColumnHelper<typeof features, ReviewRow>();
@@ -222,10 +227,12 @@ export function ReviewStep({
   const [columnNames, setColumnNames] = useState<string[]>([]);
   const [removed, setRemoved] = useState<Set<number>>(new Set());
   const [removedRows, setRemovedRows] = useState<Set<string>>(new Set());
+  const [query, setQuery] = useState("");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
   const [layoutName, setLayoutName] = useState(suggestedLayoutName);
   const [rememberDismissed, setRememberDismissed] = useState(false);
+  const findRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setLayoutName(suggestedLayoutName);
@@ -241,6 +248,7 @@ export function ReviewStep({
     setRemoved(new Set());
     setRemovedRows(new Set());
     setEdits({});
+    setQuery("");
     // Reset when the extracted header set changes, not on array identity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sourceKey]);
@@ -254,6 +262,11 @@ export function ReviewStep({
   const visibleRows = useMemo(
     () => rows.filter((row) => !removedRows.has(row.id)),
     [rows, removedRows],
+  );
+  const finding = query.trim().length > 0;
+  const listedRows = useMemo(
+    () => (finding ? visibleRows.filter((row) => rowMatchesQuery(row, query)) : visibleRows),
+    [visibleRows, query, finding],
   );
   const corrections = useMemo(
     () => correctionsFromEdits(original, names, edits, removed, removedRows),
@@ -269,6 +282,20 @@ export function ReviewStep({
     [original, removedRows],
   );
   const hasRows = visibleRows.length > 0;
+  const hasListed = listedRows.length > 0;
+
+  useEffect(() => {
+    if (!hasRows) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.altKey || event.shiftKey) return;
+      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "f") return;
+      event.preventDefault();
+      findRef.current?.focus();
+      findRef.current?.select();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [hasRows]);
   const growHeaderId = useMemo(() => {
     const ids = visible.map((index) => `c${index}`);
     return (
@@ -358,7 +385,7 @@ export function ReviewStep({
   const table = useTable({
     features,
     columns,
-    data: visibleRows,
+    data: listedRows,
   });
 
   const save = async (kind: "csv" | "xlsx") => {
@@ -388,10 +415,13 @@ export function ReviewStep({
   const boxSummary = `${boxCount || tables.length} box${
     (boxCount || tables.length) === 1 ? "" : "es"
   }${templateName ? ` · ${templateName}` : ""}`;
+  const rowCount = finding
+    ? `${listedRows.length} of ${visibleRows.length} rows`
+    : `${visibleRows.length} rows`;
   const status = loading
     ? `Reading ${boxSummary}…`
     : hasRows
-      ? `${visibleRows.length} rows · ${boxSummary}${
+      ? `${rowCount} · ${boxSummary}${
           corrections.length ? ` · ${corrections.length} corrected` : ""
         }${removedRows.size ? ` · ${removedRows.size} dropped` : ""}`
       : `No rows · ${boxSummary}`;
@@ -400,7 +430,12 @@ export function ReviewStep({
     : loading
       ? "Wait for rows before export."
       : "Adjust the boxes, then export.";
-  const showHelper = hasRows && dropped.length === 0 && droppedRowItems.length === 0 && suspects.length === 0;
+  const showHelper =
+    hasRows &&
+    !finding &&
+    dropped.length === 0 &&
+    droppedRowItems.length === 0 &&
+    suspects.length === 0;
   const showRemember = Boolean(canRemember && onRememberLayout && hasRows && !rememberDismissed);
 
   const editValue: ReviewEditContextValue = {
@@ -433,6 +468,33 @@ export function ReviewStep({
             {status}
           </p>
           <div className="ml-auto flex shrink-0 flex-nowrap items-center justify-end gap-2">
+            {hasRows && (
+              <Input
+                ref={findRef}
+                id="review-find"
+                type="search"
+                size="sm"
+                className="w-40"
+                value={query}
+                placeholder="Find"
+                autoComplete="off"
+                spellCheck={false}
+                aria-label="Find in rows"
+                aria-keyshortcuts={findShortcut}
+                aria-controls="review-ledger"
+                title={`Find (${findShortcut})`}
+                onChange={(event) => setQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key !== "Escape") return;
+                  if (query) {
+                    event.preventDefault();
+                    setQuery("");
+                    return;
+                  }
+                  event.currentTarget.blur();
+                }}
+              />
+            )}
             {exportHint && (
               <p id="export-hint" className="sr-only">
                 {exportHint}
@@ -544,7 +606,23 @@ export function ReviewStep({
                   Rename a header. Hover a row to drop it. Amber is yours.
                 </p>
               )}
-              <div className="ledger-scroll">
+              {finding && !hasListed && (
+                <p className="ledger-caption">
+                  No rows match that find.{" "}
+                  <button
+                    type="button"
+                    className="text-foreground underline-offset-2 hover:underline"
+                    onClick={() => {
+                      setQuery("");
+                      findRef.current?.focus();
+                    }}
+                  >
+                    Clear
+                  </button>
+                </p>
+              )}
+              {hasListed && (
+              <div className="ledger-scroll" id="review-ledger">
                 <Table className="ledger w-max min-w-full" containerClassName="overflow-visible w-max min-w-full">
                   <TableHeader>
                     {table.getHeaderGroups().map((group) => (
@@ -598,6 +676,7 @@ export function ReviewStep({
                   </TableBody>
                 </Table>
               </div>
+              )}
             </div>
           )}
         </div>

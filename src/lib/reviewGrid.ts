@@ -141,6 +141,18 @@ export function columnSuspects(columns: string[], rows: ReviewRow[]): ColumnSusp
   return suspects;
 }
 
+function findHaystack(value: string): string {
+  return value.toLowerCase().replace(/,/g, "");
+}
+
+/** Case-insensitive substring match across page and cells. Commas in amounts are ignored. */
+export function rowMatchesQuery(row: ReviewRow, query: string): boolean {
+  const needle = findHaystack(query).trim();
+  if (!needle) return true;
+  if (findHaystack(String(row.page)).includes(needle)) return true;
+  return row.cells.some((cell) => findHaystack(cell).includes(needle));
+}
+
 /** Ledger amount columns — not “Value Date”. */
 export function isMoneyColumn(name: string): boolean {
   const n = name.trim().toLowerCase();
