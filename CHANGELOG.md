@@ -1,5 +1,11 @@
 # pesaview
 
+## 0.2.2
+
+### Patch Changes
+
+- [#8](https://github.com/davidamunga/pesaview/pull/8) [`c2fd092`](https://github.com/davidamunga/pesaview/commit/c2fd092b1dcbca05dc2f6cf2b1f040826c5cd02e) Thanks [@davidamunga](https://github.com/davidamunga)! - Keep empty ledger columns aligned when stream extraction omits blank cells.
+
 ## 0.2.1
 
 ### Patch Changes
