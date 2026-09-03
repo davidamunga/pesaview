@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Document, pdfjs } from "react-pdf";
+import { Document, PasswordResponses, pdfjs } from "react-pdf";
 import workerSrc from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { tempDir, join } from "@tauri-apps/api/path";
 import { writeFile } from "@tauri-apps/plugin-fs";
@@ -24,6 +24,7 @@ import {
 import { applyTemplateArea } from "@/lib/coordinates";
 import { matchTemplate } from "@/lib/matchTemplate";
 import { pickPdf } from "@/lib/pickPdf";
+import { pdfDocumentFile } from "@/lib/pdfSource";
 import {
   canRedo,
   canUndo,
@@ -81,6 +82,7 @@ export default function App() {
   const [method, setMethod] = useState<ExtractionMethod>("stream");
   const [needPassword, setNeedPassword] = useState(false);
   const [passwordError, setPasswordError] = useState("");
+  const [unlocking, setUnlocking] = useState(false);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
   const [customTemplates, setCustomTemplates] = useState<StatementTemplate[]>([]);
@@ -95,6 +97,7 @@ export default function App() {
   const zoomRef = useRef(1);
   const stepHeadingRef = useRef<HTMLHeadingElement>(null);
   const passwordCallback = useRef<((password: string) => void) | null>(null);
+  const unlockingRef = useRef(false);
   const autodetectedFor = useRef<string | null>(null);
   const pendingApply = useRef<StatementTemplate | null>(null);
 
@@ -114,6 +117,11 @@ export default function App() {
   const layoutSuggestion = useMemo(
     () => suggestLayout(detectSample, pdf?.name),
     [detectSample, pdf?.name],
+  );
+  const pdfData = pdf?.data;
+  const documentFile = useMemo(
+    () => pdfDocumentFile(pdfUrl, pdf?.password),
+    [pdfUrl, pdf?.password],
   );
   const pageMetricsForView = pageMetrics[currentPage];
   const pageWidth = useMemo(() => {
@@ -137,16 +145,16 @@ export default function App() {
   }, [step]);
 
   useEffect(() => {
-    if (!pdf) {
+    if (!pdfData) {
       setPdfUrl(null);
       return;
     }
-    const copy = new ArrayBuffer(pdf.data.byteLength);
-    new Uint8Array(copy).set(pdf.data);
+    const copy = new ArrayBuffer(pdfData.byteLength);
+    new Uint8Array(copy).set(pdfData);
     const url = URL.createObjectURL(new Blob([copy], { type: "application/pdf" }));
     setPdfUrl(url);
     return () => URL.revokeObjectURL(url);
-  }, [pdf]);
+  }, [pdfData]);
 
   useEffect(() => {
     if (step !== "select") return;
@@ -237,6 +245,8 @@ export default function App() {
     setPageMetrics({});
     setNeedPassword(false);
     setPasswordError("");
+    setUnlocking(false);
+    unlockingRef.current = false;
     setBusy(false);
     setStatus("");
     setActiveTemplate(null);
@@ -402,13 +412,13 @@ export default function App() {
     }
   };
 
-  const autodetect = async () => {
+  const autodetect = async (password = pdf?.password) => {
     if (!workingPath || !isTauri()) return;
     setBusy(true);
     setStatus("Looking for transaction tables…");
     try {
       const pages = pageCount > 0 ? includedPages().join(",") : "all";
-      const { areas: foundAreas, raw } = await TabulaService.guessTables(workingPath, pdf?.password, pages);
+      const { areas: foundAreas, raw } = await TabulaService.guessTables(workingPath, password, pages);
       const next = foundAreas
         .filter((area) => !excludedPages.has(area.page))
         .map((area) => ({
@@ -453,6 +463,8 @@ export default function App() {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (TabulaService.isPasswordError(message)) {
+        unlockingRef.current = false;
+        setUnlocking(false);
         setNeedPassword(true);
         setPasswordError("This PDF needs a password.");
       } else {
@@ -460,6 +472,11 @@ export default function App() {
       }
     } finally {
       setBusy(false);
+      if (unlockingRef.current) {
+        unlockingRef.current = false;
+        setUnlocking(false);
+        setNeedPassword(false);
+      }
     }
   };
 
@@ -471,6 +488,13 @@ export default function App() {
     // Autodetect once per opened file after the page count is known.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workingPath, pageCount]);
+
+  useEffect(() => {
+    if (!unlocking || pageCount < 1 || isTauri()) return;
+    unlockingRef.current = false;
+    setUnlocking(false);
+    setNeedPassword(false);
+  }, [unlocking, pageCount]);
 
   useEffect(() => {
     const pending = pendingApply.current;
@@ -511,18 +535,34 @@ export default function App() {
   }, [extractQuery.error]);
 
   const submitPassword = (password: string) => {
-    passwordCallback.current?.(password);
-    passwordCallback.current = null;
-    setPdf((current) => (current ? { ...current, password } : current));
-    setNeedPassword(false);
+    const secret = password.trim();
+    passwordCallback.current?.(secret);
+    setPdf((current) => (current ? { ...current, password: secret } : current));
+    autodetectedFor.current = null;
     setPasswordError("");
+    if (step !== "select") {
+      unlockingRef.current = false;
+      setUnlocking(false);
+      setNeedPassword(false);
+      return;
+    }
+    unlockingRef.current = true;
+    setUnlocking(true);
+    if (pageCount >= 1 && isTauri()) {
+      autodetectedFor.current = workingPath;
+      void autodetect(secret);
+    }
   };
 
   const cancelPassword = () => {
     passwordCallback.current = null;
+    unlockingRef.current = false;
+    setUnlocking(false);
     setNeedPassword(false);
     setPasswordError("");
-    setStatus("This statement needs a password to preview or extract.");
+    if (!pdf?.password) {
+      setStatus("This statement needs a password to preview or extract.");
+    }
   };
 
   const goStep = (next: WizardStep) => {
@@ -617,21 +657,28 @@ export default function App() {
           />
 
           <div className="relative flex min-h-0 min-w-0 flex-1">
-            {!pdfUrl ? (
+            {!documentFile ? (
               <p className="p-3 text-sm text-muted-foreground">Preparing PDF…</p>
             ) : (
               <Document
                 className="flex h-full min-h-0 min-w-0 flex-1 overflow-hidden"
-                file={pdfUrl}
+                file={documentFile}
                 loading={<p className="p-3 text-sm text-muted-foreground">Rendering statement…</p>}
                 onLoadSuccess={(doc) => {
                   setPageCount(doc.numPages);
                 }}
-                onPassword={(callback) => {
+                onPassword={(callback, reason) => {
                   passwordCallback.current = callback;
                   setNeedPassword(true);
+                  if (reason === PasswordResponses.INCORRECT_PASSWORD) {
+                    unlockingRef.current = false;
+                    setUnlocking(false);
+                    setPasswordError("Incorrect or missing password.");
+                  }
                 }}
                 onLoadError={(error) => {
+                  unlockingRef.current = false;
+                  setUnlocking(false);
                   if (TabulaService.isPasswordError(error.message)) {
                     setNeedPassword(true);
                     setPasswordError("Incorrect or missing password.");
@@ -706,12 +753,21 @@ export default function App() {
                 </div>
               </Document>
             )}
+            {busy && !needPassword && (
+              <p
+                aria-live="polite"
+                className="pointer-events-none absolute inset-x-0 top-0 z-10 bg-background/90 px-3 py-2 text-sm text-foreground"
+              >
+                Looking for transaction tables. This can take a moment.
+              </p>
+            )}
             {needPassword && (
               <div className="absolute inset-0 z-50 flex items-center justify-center bg-background/90 p-6">
                 <PasswordPrompt
                   fileName={pdf.name}
                   error={passwordError}
                   busy={busy}
+                  work={unlocking ? (busy ? "detecting" : "unlocking") : null}
                   onSubmit={submitPassword}
                   onCancel={cancelPassword}
                 />
