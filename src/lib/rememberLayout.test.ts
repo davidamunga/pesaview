@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Selection, StatementTemplate } from "@/types";
 import {
+  guessPageSpec,
   planAutodetect,
   rememberCopy,
   rememberedAreas,
@@ -89,9 +90,12 @@ describe("stampSelectionsToEmptyPages", () => {
     expect(page2?.left).toBeCloseTo(box.left);
   });
 
-  it("leaves boxes alone when more than one page already has one", () => {
-    const existing = [box, { ...box, id: "b", page: 2 }];
-    expect(stampSelectionsToEmptyPages(existing, [1, 2, 3], { 1: page }, page)).toEqual(existing);
+  it("fills later empty pages from the continuation box", () => {
+    const later: Selection = { ...box, id: "b", page: 2, top: 79.2 };
+    const stamped = stampSelectionsToEmptyPages([box, later], [1, 2, 3], { 1: page, 2: page }, page);
+    expect(stamped.map((item) => item.page).sort((a, b) => a - b)).toEqual([1, 2, 3]);
+    expect(stamped.find((item) => item.page === 3)?.top).toBeCloseTo(later.top);
+    expect(stamped.find((item) => item.page === 1)?.top).toBeCloseTo(box.top);
   });
 });
 
@@ -100,7 +104,7 @@ describe("planAutodetect", () => {
     expect(planAutodetect(0, ncba)).toEqual({
       kind: "apply-match",
       template: ncba,
-      status: "Using “NCBA Loop”. Adjust the boxes if the table looks off.",
+      status: "Using “NCBA Loop” on every page. Adjust the boxes if the table looks off.",
     });
   });
 
@@ -111,10 +115,20 @@ describe("planAutodetect", () => {
     });
   });
 
-  it("keeps found regions and mentions cleanup when a template also matches", () => {
+  it("applies the remembered layout to every page even when detect found a few regions", () => {
     expect(planAutodetect(2, ncba)).toEqual({
-      kind: "found",
-      status: "Found 2 table regions. Using “NCBA Loop” cleanup.",
+      kind: "apply-match",
+      template: ncba,
+      status: "Using “NCBA Loop” on every page. Adjust the boxes if the table looks off.",
     });
+  });
+});
+
+describe("guessPageSpec", () => {
+  it("only samples the first pages of a decade statement", () => {
+    expect(guessPageSpec(Array.from({ length: 400 }, (_, i) => i + 1))).toBe(
+      "1,2,3,4,5,6,7,8",
+    );
+    expect(guessPageSpec()).toBe("1-8");
   });
 });

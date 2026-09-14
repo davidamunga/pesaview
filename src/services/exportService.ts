@@ -4,25 +4,19 @@ import Papa from "papaparse";
 import type { CellCorrection, ExtractedTable } from "@/types";
 import { flattenTables } from "@/lib/tabulaJson";
 
-export async function exportCsv(tables: ExtractedTable[], defaultName: string): Promise<string> {
+function csvBytes(tables: ExtractedTable[]): Uint8Array {
   const { columns, rows } = flattenTables(tables);
   const csv = Papa.unparse({
     fields: columns,
     data: rows,
   });
-  const bytes = new TextEncoder().encode(`\uFEFF${csv}`);
-  return invoke<string>("save_file", {
-    content: bytes,
-    defaultFilename: defaultName.replace(/\.pdf$/i, "") + ".csv",
-    fileType: "csv",
-  });
+  return new TextEncoder().encode(`\uFEFF${csv}`);
 }
 
-export async function exportXlsx(
+async function xlsxBytes(
   tables: ExtractedTable[],
-  defaultName: string,
   corrections: CellCorrection[] = [],
-): Promise<string> {
+): Promise<Uint8Array> {
   const workbook = new ExcelJS.Workbook();
   workbook.creator = "PesaView";
 
@@ -46,11 +40,44 @@ export async function exportXlsx(
   ]));
 
   const buffer = await workbook.xlsx.writeBuffer();
-  const bytes = new Uint8Array(buffer);
+  return new Uint8Array(buffer);
+}
+
+export async function exportCsv(tables: ExtractedTable[], defaultName: string): Promise<string> {
   return invoke<string>("save_file", {
-    content: bytes,
+    content: csvBytes(tables),
+    defaultFilename: defaultName.replace(/\.pdf$/i, "") + ".csv",
+    fileType: "csv",
+  });
+}
+
+export async function writeCsv(tables: ExtractedTable[], destPath: string): Promise<string> {
+  return invoke<string>("write_file_at", {
+    path: destPath,
+    content: csvBytes(tables),
+  });
+}
+
+export async function exportXlsx(
+  tables: ExtractedTable[],
+  defaultName: string,
+  corrections: CellCorrection[] = [],
+): Promise<string> {
+  return invoke<string>("save_file", {
+    content: await xlsxBytes(tables, corrections),
     defaultFilename: defaultName.replace(/\.pdf$/i, "") + ".xlsx",
     fileType: "xlsx",
+  });
+}
+
+export async function writeXlsx(
+  tables: ExtractedTable[],
+  destPath: string,
+  corrections: CellCorrection[] = [],
+): Promise<string> {
+  return invoke<string>("write_file_at", {
+    path: destPath,
+    content: await xlsxBytes(tables, corrections),
   });
 }
 

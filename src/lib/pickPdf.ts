@@ -3,6 +3,22 @@ import { readFile } from "@tauri-apps/plugin-fs";
 import { isTauri } from "@/lib/utils";
 import type { OpenedPdf } from "@/types";
 
+export interface PickedPdf {
+  path: string;
+  name: string;
+}
+
+export function pdfPathsFromDrop(paths: string[]): string[] {
+  return paths.filter((path) => path.toLowerCase().endsWith(".pdf"));
+}
+
+export function pickedFromPath(path: string): PickedPdf {
+  return {
+    path,
+    name: path.split(/[\\/]/).pop() || "statement.pdf",
+  };
+}
+
 function fromBrowserFile(file: File): Promise<OpenedPdf> {
   if (!file.name.toLowerCase().endsWith(".pdf")) {
     return Promise.reject(new Error("Please choose a PDF file."));
@@ -49,4 +65,32 @@ export async function pickPdf(): Promise<OpenedPdf | null> {
     }
   }
   return pickFromInput();
+}
+
+/** Native multi-file picker. Returns null if cancelled. Desktop only. */
+export async function pickPdfs(): Promise<PickedPdf[] | null> {
+  if (!isTauri()) return null;
+  try {
+    const selected = await open({
+      multiple: true,
+      filters: [{ name: "PDF", extensions: ["pdf"] }],
+    });
+    if (selected == null) return null;
+    const paths = Array.isArray(selected) ? selected : [selected];
+    const pdfs = pdfPathsFromDrop(paths).map(pickedFromPath);
+    return pdfs.length > 0 ? pdfs : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Output folder for batch exports. Returns null if cancelled. Desktop only. */
+export async function pickDirectory(): Promise<string | null> {
+  if (!isTauri()) return null;
+  try {
+    const selected = await open({ directory: true, multiple: false });
+    return typeof selected === "string" ? selected : null;
+  } catch {
+    return null;
+  }
 }

@@ -1,9 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { detectTransactionAreas } from "@/lib/detectTables";
+import { GUESS_PAGE_LIMIT } from "@/lib/rememberLayout";
 import { tablesFromTabulaJson } from "@/lib/tabulaJson";
+import { tabulaTimeoutMs } from "@/lib/tabulaTimeout";
 import type { ExtractOptions, ExtractedTable, TableArea } from "@/types";
-
-const EXTRACT_TIMEOUT_MS = 90_000;
 
 export class TabulaService {
   static isPasswordError(message: string | undefined): boolean {
@@ -29,7 +29,7 @@ export class TabulaService {
         password: password || null,
         areas,
       }),
-      EXTRACT_TIMEOUT_MS,
+      tabulaTimeoutMs("extract", areas.length),
     );
     return tablesFromTabulaJson(raw, options);
   }
@@ -45,7 +45,7 @@ export class TabulaService {
         password: password || null,
         pages,
       }),
-      EXTRACT_TIMEOUT_MS,
+      tabulaTimeoutMs("guess", guessWorkItems(pages)),
     );
     return { areas: detectTransactionAreas(raw), raw };
   }
@@ -59,11 +59,33 @@ export class TabulaService {
   }
 }
 
+function guessWorkItems(pages: string): number {
+  const trimmed = pages.trim();
+  if (!trimmed || trimmed.toLowerCase() === "all") return GUESS_PAGE_LIMIT;
+  let count = 0;
+  for (const part of trimmed.split(",")) {
+    const piece = part.trim();
+    if (!piece) continue;
+    const dash = piece.indexOf("-");
+    if (dash > 0) {
+      const from = Number(piece.slice(0, dash));
+      const to = Number(piece.slice(dash + 1));
+      if (Number.isFinite(from) && Number.isFinite(to)) {
+        count += Math.abs(to - from) + 1;
+        continue;
+      }
+    }
+    count += 1;
+  }
+  return Math.max(1, count);
+}
+
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  const seconds = Math.round(ms / 1000);
   return new Promise<T>((resolve, reject) => {
     const timer = window.setTimeout(() => {
       void TabulaService.cancel();
-      reject(new Error("Tabula timed out after 90 seconds"));
+      reject(new Error(`Tabula timed out after ${seconds} seconds`));
     }, ms);
     promise.then(
       (value) => {

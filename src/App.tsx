@@ -4,6 +4,7 @@ import { Document, PasswordResponses, pdfjs } from "react-pdf";
 import workerSrc from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { tempDir, join } from "@tauri-apps/api/path";
 import { writeFile } from "@tauri-apps/plugin-fs";
+import { BatchView } from "@/components/batch-view";
 import { FileOpener } from "@/components/file-opener";
 import { PageSidebar } from "@/components/page-sidebar";
 import { PasswordPrompt } from "@/components/password-prompt";
@@ -23,7 +24,8 @@ import {
 } from "@/components/ui/dialog";
 import { applyTemplateArea } from "@/lib/coordinates";
 import { matchTemplate } from "@/lib/matchTemplate";
-import { pickPdf } from "@/lib/pickPdf";
+import { jobsFromPicked, type BatchJob } from "@/lib/batchJob";
+import { pickPdf, type PickedPdf } from "@/lib/pickPdf";
 import { pdfDocumentFile } from "@/lib/pdfSource";
 import {
   canRedo,
@@ -36,6 +38,7 @@ import {
   undoHistory,
 } from "@/lib/selectionHistory";
 import {
+  guessPageSpec,
   planAutodetect,
   rememberCopy,
   stampSelectionsToEmptyPages,
@@ -93,6 +96,7 @@ export default function App() {
   const [zoom, setZoom] = useState(1);
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const [pendingPdf, setPendingPdf] = useState<OpenedPdf | null>(null);
+  const [batchJobs, setBatchJobs] = useState<BatchJob[] | null>(null);
   const viewerRef = useRef<HTMLDivElement>(null);
   const zoomRef = useRef(1);
   const stepHeadingRef = useRef<HTMLHeadingElement>(null);
@@ -113,6 +117,7 @@ export default function App() {
   const areaKey = JSON.stringify(areas);
   const canSelect = Boolean(pdf);
   const canReview = areas.length > 0;
+  const inBatch = batchJobs !== null && !pdf;
   const canContinue = areas.length > 0 && !busy;
   const layoutSuggestion = useMemo(
     () => suggestLayout(detectSample, pdf?.name),
@@ -290,6 +295,21 @@ export default function App() {
     void openPdf(next);
   };
 
+  const startBatch = (picked: PickedPdf[]) => {
+    if (picked.length === 0) return;
+    setPendingPdf(null);
+    setPdf(null);
+    clearWorkspace();
+    setBatchJobs(jobsFromPicked(picked, createId));
+    setStep("upload");
+  };
+
+  const backToBatch = () => {
+    setPdf(null);
+    clearWorkspace();
+    setStep("upload");
+  };
+
   const changePdf = async () => {
     try {
       const next = await pickPdf();
@@ -417,7 +437,7 @@ export default function App() {
     setBusy(true);
     setStatus("Looking for transaction tables…");
     try {
-      const pages = pageCount > 0 ? includedPages().join(",") : "all";
+      const pages = guessPageSpec(includedPages());
       const { areas: foundAreas, raw } = await TabulaService.guessTables(workingPath, password, pages);
       const next = foundAreas
         .filter((area) => !excludedPages.has(area.page))
@@ -599,24 +619,43 @@ export default function App() {
         step={step}
         canSelect={canSelect}
         canReview={canReview}
-        fileName={pdf?.name}
+        fileName={inBatch ? `${batchJobs.length} statements` : pdf?.name}
         onStep={goStep}
       />
 
+      {batchJobs ? (
+        <div
+          hidden={!inBatch}
+          inert={!inBatch ? true : undefined}
+          className={cn("min-h-0 flex-1 flex-col", inBatch ? "flex" : "hidden")}
+        >
+          <BatchView
+            jobs={batchJobs}
+            templates={templates}
+            headingRef={inBatch ? stepHeadingRef : undefined}
+            onJobsChange={setBatchJobs}
+            onClose={() => setBatchJobs(null)}
+            onOpenEditor={(next) => void openPdf(next)}
+          />
+        </div>
+      ) : null}
+
       <div
-        hidden={step !== "upload" && Boolean(pdf)}
-        inert={step !== "upload" && Boolean(pdf) ? true : undefined}
+        hidden={inBatch || (step !== "upload" && Boolean(pdf))}
+        inert={inBatch || (step !== "upload" && Boolean(pdf)) ? true : undefined}
         className={cn(
           "min-h-0 flex-1 flex-col",
-          step === "upload" || !pdf ? "flex" : "hidden",
+          !inBatch && (step === "upload" || !pdf) ? "flex" : "hidden",
         )}
       >
         <FileOpener
           onOpen={handleOpen}
+          onBatch={startBatch}
+          onBackToBatch={batchJobs ? backToBatch : undefined}
           busy={busy}
           currentFile={pdf ? { name: pdf.name, pageCount: pageCount || undefined } : undefined}
           onKeepFile={() => setStep("select")}
-          headingRef={step === "upload" ? stepHeadingRef : undefined}
+          headingRef={step === "upload" && !inBatch ? stepHeadingRef : undefined}
         />
       </div>
 

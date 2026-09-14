@@ -11,7 +11,8 @@ interface PasswordPromptProps {
   error?: string;
   busy?: boolean;
   work?: PasswordWork | null;
-  onSubmit: (password: string) => void;
+  allowApplyToRest?: boolean;
+  onSubmit: (password: string, applyToRest?: boolean) => void;
   onCancel: () => void;
 }
 
@@ -31,10 +32,12 @@ export function PasswordPrompt({
   error,
   busy,
   work,
+  allowApplyToRest,
   onSubmit,
   onCancel,
 }: PasswordPromptProps) {
   const [password, setPassword] = useState("");
+  const [applyToRest, setApplyToRest] = useState(true);
   const inputRef = useRef<HTMLInputElement>(null);
   const errorId = useId();
   const waiting = Boolean(work);
@@ -52,7 +55,7 @@ export function PasswordPrompt({
       onSubmit={(event) => {
         event.preventDefault();
         if (waiting) return;
-        if (password.trim()) onSubmit(password.trim());
+        if (password.trim()) onSubmit(password.trim(), allowApplyToRest ? applyToRest : undefined);
       }}
     >
       <header className="space-y-1">
@@ -103,6 +106,17 @@ export function PasswordPrompt({
                 {error}
               </p>
             )}
+            {allowApplyToRest ? (
+              <label className="flex items-center gap-2 pt-1 text-sm font-normal text-muted-foreground">
+                <input
+                  type="checkbox"
+                  checked={applyToRest}
+                  className="size-3.5 accent-primary"
+                  onChange={(event) => setApplyToRest(event.target.checked)}
+                />
+                Use this password for the rest
+              </label>
+            ) : null}
           </div>
 
           <div className="flex gap-2">

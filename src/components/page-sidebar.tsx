@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import { Page } from "react-pdf";
 import { pdfToCss } from "@/lib/coordinates";
 import { cn } from "@/lib/utils";
@@ -26,7 +27,7 @@ export function PageSidebar({
 
   return (
     <aside className="flex h-full w-28 shrink-0 flex-col border-r bg-card">
-      <div className="flex-1 space-y-2 overflow-y-auto p-1.5">
+      <div data-page-list className="flex-1 space-y-2 overflow-y-auto p-1.5">
         {Array.from({ length: pageCount }, (_, index) => {
           const page = index + 1;
           const excluded = excludedPages.has(page);
@@ -52,11 +53,11 @@ export function PageSidebar({
                 onClick={() => onSelect(page)}
               >
                 <div className="relative overflow-hidden rounded-[3px] bg-muted">
-                  <Page
-                    pageNumber={page}
+                  <LazyThumb
+                    page={page}
                     width={88}
-                    renderAnnotationLayer={false}
-                    renderTextLayer={false}
+                    height={metrics ? (88 / metrics.pdfWidth) * metrics.pdfHeight : 114}
+                    eager={currentPage === page}
                   />
                   {metrics &&
                     pageSelections.map((selection) => {
@@ -97,5 +98,51 @@ export function PageSidebar({
         })}
       </div>
     </aside>
+  );
+}
+
+function LazyThumb({
+  page,
+  width,
+  height,
+  eager,
+}: {
+  page: number;
+  width: number;
+  height: number;
+  eager?: boolean;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [visible, setVisible] = useState(Boolean(eager));
+
+  useEffect(() => {
+    if (eager) {
+      setVisible(true);
+      return;
+    }
+    const node = ref.current;
+    if (!node) return;
+    const root = node.closest("[data-page-list]");
+    const io = new IntersectionObserver(
+      ([entry]) => setVisible(entry.isIntersecting),
+      { root: root instanceof Element ? root : null, rootMargin: "280px 0px", threshold: 0.01 },
+    );
+    io.observe(node);
+    return () => io.disconnect();
+  }, [eager]);
+
+  return (
+    <div ref={ref} style={{ width, height }}>
+      {visible ? (
+        <Page
+          pageNumber={page}
+          width={width}
+          renderAnnotationLayer={false}
+          renderTextLayer={false}
+        />
+      ) : (
+        <div className="size-full bg-muted" />
+      )}
+    </div>
   );
 }

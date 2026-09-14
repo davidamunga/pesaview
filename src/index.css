@@ -236,7 +236,7 @@ body {
   vertical-align: top;
 }
 
-.ledger tbody tr:nth-child(even) td {
+.ledger tbody tr[data-alt="true"] td {
   background: var(--ledger-row);
 }
 

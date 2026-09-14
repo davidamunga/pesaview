@@ -19,9 +19,10 @@ import {
   tablesToReview,
   type ColumnSuspect,
 } from "@/lib/reviewGrid";
-import { cn } from "@/lib/utils";
+import { windowedRange } from "@/lib/windowedRows";
 import { exportCsv, exportXlsx } from "@/services/exportService";
 import type { ExtractedTable, ReviewRow } from "@/types";
+import { cn } from "@/lib/utils";
 
 const apple =
   typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.userAgent);
@@ -233,6 +234,8 @@ export function ReviewStep({
   const [layoutName, setLayoutName] = useState(suggestedLayoutName);
   const [rememberDismissed, setRememberDismissed] = useState(false);
   const findRef = useRef<HTMLInputElement>(null);
+  const ledgerRef = useRef<HTMLDivElement>(null);
+  const [windowView, setWindowView] = useState({ top: 0, height: 480 });
 
   useEffect(() => {
     setLayoutName(suggestedLayoutName);
@@ -283,6 +286,27 @@ export function ReviewStep({
   );
   const hasRows = visibleRows.length > 0;
   const hasListed = listedRows.length > 0;
+
+  const syncLedgerWindow = useCallback(() => {
+    const el = ledgerRef.current;
+    if (!el) return;
+    setWindowView({ top: el.scrollTop, height: el.clientHeight });
+  }, []);
+
+  useEffect(() => {
+    if (!hasListed) return;
+    const el = ledgerRef.current;
+    if (!el) return;
+    syncLedgerWindow();
+    const observer = new ResizeObserver(() => syncLedgerWindow());
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [hasListed, listedRows.length, syncLedgerWindow]);
+
+  const windowed = useMemo(
+    () => windowedRange(listedRows.length, windowView.top, windowView.height),
+    [listedRows.length, windowView.top, windowView.height],
+  );
 
   useEffect(() => {
     if (!hasRows) return;
@@ -622,7 +646,12 @@ export function ReviewStep({
                 </p>
               )}
               {hasListed && (
-              <div className="ledger-scroll" id="review-ledger">
+              <div
+                className="ledger-scroll"
+                id="review-ledger"
+                ref={ledgerRef}
+                onScroll={syncLedgerWindow}
+              >
                 <Table className="ledger w-max min-w-full" containerClassName="overflow-visible w-max min-w-full">
                   <TableHeader>
                     {table.getHeaderGroups().map((group) => (
@@ -650,8 +679,21 @@ export function ReviewStep({
                     ))}
                   </TableHeader>
                   <TableBody>
-                    {table.getRowModel().rows.map((row) => (
-                      <TableRow key={row.id} className="group/row border-0 hover:bg-transparent">
+                    {windowed.padTop > 0 && (
+                      <TableRow aria-hidden className="border-0 hover:bg-transparent">
+                        <TableCell
+                          colSpan={2 + visible.length}
+                          className="p-0"
+                          style={{ height: windowed.padTop, border: 0 }}
+                        />
+                      </TableRow>
+                    )}
+                    {table.getRowModel().rows.slice(windowed.start, windowed.end).map((row) => (
+                      <TableRow
+                        key={row.id}
+                        data-alt={row.index % 2 === 1 ? "true" : undefined}
+                        className="group/row border-0 hover:bg-transparent"
+                      >
                         {row.getAllCells().map((cell) => {
                           const role = headerRole(cell.column.id, names);
                           const grow = cell.column.id === growHeaderId;
@@ -673,6 +715,15 @@ export function ReviewStep({
                         })}
                       </TableRow>
                     ))}
+                    {windowed.padBottom > 0 && (
+                      <TableRow aria-hidden className="border-0 hover:bg-transparent">
+                        <TableCell
+                          colSpan={2 + visible.length}
+                          className="p-0"
+                          style={{ height: windowed.padBottom, border: 0 }}
+                        />
+                      </TableRow>
+                    )}
                   </TableBody>
                 </Table>
               </div>

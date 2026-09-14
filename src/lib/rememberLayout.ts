@@ -68,6 +68,29 @@ export function rememberedAreas(
   return [...firstPage, { ...continuation, page: 0 }];
 }
 
+/** First pages are enough to match a remembered layout on a decade PDF. */
+export const GUESS_PAGE_LIMIT = 8;
+
+export function guessPageSpec(includedPages: number[] = []): string {
+  const pages = includedPages.filter((page) => page >= 1).slice(0, GUESS_PAGE_LIMIT);
+  return pages.length > 0 ? pages.join(",") : `1-${GUESS_PAGE_LIMIT}`;
+}
+
+function boxesByPage(selections: Selection[]): Map<number, Selection[]> {
+  const byPage = new Map<number, Selection[]>();
+  for (const selection of selections) {
+    const list = byPage.get(selection.page) ?? [];
+    list.push(selection);
+    byPage.set(selection.page, list);
+  }
+  return byPage;
+}
+
+function continuationPage(pages: number[]): number | undefined {
+  const unique = [...new Set(pages)].sort((a, b) => a - b);
+  return unique.filter((page) => page !== 1).at(-1) ?? unique[0];
+}
+
 export function stampSelectionsToEmptyPages(
   selections: Selection[],
   includedPages: number[],
@@ -75,16 +98,21 @@ export function stampSelectionsToEmptyPages(
   fallback?: PageMetrics,
 ): Selection[] {
   if (selections.length === 0) return selections;
-  const pagesWithBoxes = new Set(selections.map((selection) => selection.page));
-  if (pagesWithBoxes.size !== 1) return selections;
-  const sourceMetrics = metricsByPage[selections[0].page] ?? fallback;
+  const byPage = boxesByPage(selections);
+  const empty = includedPages.filter((page) => !byPage.has(page));
+  if (empty.length === 0) return selections;
+
+  const sourcePage = continuationPage([...byPage.keys()]);
+  if (sourcePage == null) return selections;
+  const sourceBoxes = byPage.get(sourcePage);
+  if (!sourceBoxes?.length) return selections;
+  const sourceMetrics = metricsByPage[sourcePage] ?? fallback;
   if (!sourceMetrics) return selections;
 
   const extras: Selection[] = [];
-  for (const page of includedPages) {
-    if (pagesWithBoxes.has(page)) continue;
+  for (const page of empty) {
     const metrics = metricsByPage[page] ?? fallback ?? sourceMetrics;
-    for (const selection of selections) {
+    for (const selection of sourceBoxes) {
       extras.push(
         applyTemplateArea(
           {
@@ -114,21 +142,16 @@ export function planAutodetect(
   foundCount: number,
   matched: StatementTemplate | undefined,
 ): AutodetectPlan {
-  if (foundCount > 0) {
-    const regions = `${foundCount} table region${foundCount === 1 ? "" : "s"}`;
-    return {
-      kind: "found",
-      status: matched
-        ? `Found ${regions}. Using “${matched.name}” cleanup.`
-        : `Found ${regions}.`,
-    };
-  }
   if (matched) {
     return {
       kind: "apply-match",
       template: matched,
-      status: `Using “${matched.name}”. Adjust the boxes if the table looks off.`,
+      status: `Using “${matched.name}” on every page. Adjust the boxes if the table looks off.`,
     };
+  }
+  if (foundCount > 0) {
+    const regions = `${foundCount} table region${foundCount === 1 ? "" : "s"}`;
+    return { kind: "found", status: `Found ${regions}.` };
   }
   return {
     kind: "miss",
