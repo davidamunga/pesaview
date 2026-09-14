@@ -1,5 +1,5 @@
 import type { RefObject } from "react";
-import { Check, CircleX, Minus, Plus, Redo2, Undo2, Zap } from "lucide-react";
+import { Check, CircleX, Copy, Minus, Plus, Redo2, Undo2, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { TemplatesMenu } from "@/components/templates-menu";
 import {
@@ -33,6 +33,8 @@ interface SelectToolbarProps {
   onApplyTemplate: (template: StatementTemplate) => void;
   onSaveTemplate: (name: string) => void;
   onClear: () => void;
+  canRepeat?: boolean;
+  onRepeat?: () => void;
   onAutodetect: () => void;
   onContinue: () => void;
   onChangePdf: () => void;
@@ -59,6 +61,8 @@ export function SelectToolbar({
   onApplyTemplate,
   onSaveTemplate,
   onClear,
+  canRepeat,
+  onRepeat,
   onAutodetect,
   onContinue,
   onChangePdf,
@@ -164,6 +168,18 @@ export function SelectToolbar({
             </DropdownMenuGroup>
           </DropdownMenuContent>
         </DropdownMenu>
+        {canRepeat && onRepeat && (
+          <Button
+            variant="outline"
+            size="xs"
+            disabled={busy}
+            title="Copy this page’s box onto the other pages"
+            onClick={onRepeat}
+          >
+            <Copy />
+            Use on all pages
+          </Button>
+        )}
         {canAutodetect && (
           <Button variant="outline" size="xs" disabled={busy} onClick={onAutodetect}>
             <Zap />

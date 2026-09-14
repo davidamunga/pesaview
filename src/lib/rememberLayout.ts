@@ -88,7 +88,8 @@ function boxesByPage(selections: Selection[]): Map<number, Selection[]> {
 
 function continuationPage(pages: number[]): number | undefined {
   const unique = [...new Set(pages)].sort((a, b) => a - b);
-  return unique.filter((page) => page !== 1).at(-1) ?? unique[0];
+  const later = unique.filter((page) => page !== 1);
+  return later[later.length - 1] ?? unique[0];
 }
 
 export function stampSelectionsToEmptyPages(
@@ -131,6 +132,47 @@ export function stampSelectionsToEmptyPages(
     }
   }
   return extras.length > 0 ? [...selections, ...extras] : selections;
+}
+
+export function repeatPageSelections(
+  selections: Selection[],
+  sourcePage: number,
+  includedPages: number[],
+  metricsByPage: Record<number, PageMetrics>,
+  fallback?: PageMetrics,
+): Selection[] {
+  const source = selections.filter((selection) => selection.page === sourcePage);
+  if (source.length === 0) return selections;
+  const sourceMetrics = metricsByPage[sourcePage] ?? fallback;
+  if (!sourceMetrics) return selections;
+
+  const included = new Set(includedPages);
+  const kept = selections.filter(
+    (selection) => selection.page === sourcePage || !included.has(selection.page),
+  );
+  const extras: Selection[] = [];
+  for (const page of includedPages) {
+    if (page === sourcePage) continue;
+    const metrics = metricsByPage[page] ?? fallback ?? sourceMetrics;
+    for (const selection of source) {
+      extras.push(
+        applyTemplateArea(
+          {
+            page: 0,
+            top: selection.top / sourceMetrics.pdfHeight,
+            left: selection.left / sourceMetrics.pdfWidth,
+            bottom: selection.bottom / sourceMetrics.pdfHeight,
+            right: selection.right / sourceMetrics.pdfWidth,
+            method: selection.method,
+          },
+          page,
+          metrics,
+          { normalized: true },
+        ),
+      );
+    }
+  }
+  return extras.length > 0 ? [...kept, ...extras] : selections;
 }
 
 export type AutodetectPlan =

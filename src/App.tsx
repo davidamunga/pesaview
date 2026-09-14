@@ -27,6 +27,7 @@ import { matchTemplate } from "@/lib/matchTemplate";
 import { jobsFromPicked, type BatchJob } from "@/lib/batchJob";
 import { pickPdf, type PickedPdf } from "@/lib/pickPdf";
 import { pdfDocumentFile } from "@/lib/pdfSource";
+import { pdfPageMetrics } from "@/lib/pdfPageMetrics";
 import {
   canRedo,
   canUndo,
@@ -41,6 +42,7 @@ import {
   guessPageSpec,
   planAutodetect,
   rememberCopy,
+  repeatPageSelections,
   stampSelectionsToEmptyPages,
   suggestLayout,
 } from "@/lib/rememberLayout";
@@ -375,8 +377,10 @@ export default function App() {
     Array.from({ length: pageCount }, (_, i) => i + 1).filter((page) => !excludedPages.has(page));
 
   const applyTemplate = (template: StatementTemplate) => {
-    const fallback = pageMetrics[currentPage];
+    const fallback =
+      pageMetrics[currentPage] ?? pageMetrics[1] ?? Object.values(pageMetrics)[0];
     if (!fallback) {
+      pendingApply.current = template;
       setStatus("Wait for the page to finish rendering, then apply the template again.");
       return;
     }
@@ -432,10 +436,28 @@ export default function App() {
     }
   };
 
+  const repeatCurrentPage = () => {
+    const fallback =
+      pageMetrics[currentPage] ?? pageMetrics[1] ?? Object.values(pageMetrics)[0];
+    const next = repeatPageSelections(
+      selections,
+      currentPage,
+      includedPages(),
+      pageMetrics,
+      fallback,
+    );
+    if (next === selections) {
+      setStatus("Draw or adjust the box on this page first.");
+      return;
+    }
+    replaceBoxes(next);
+    setStatus("Using this box on the other pages. Continue to check the rows.");
+  };
+
   const autodetect = async (password = pdf?.password) => {
     if (!workingPath || !isTauri()) return;
-    setBusy(true);
-    setStatus("Looking for transaction tables…");
+      setBusy(true);
+      setStatus("Looking at the first pages…");
     try {
       const pages = guessPageSpec(includedPages());
       const { areas: foundAreas, raw } = await TabulaService.guessTables(workingPath, password, pages);
@@ -455,8 +477,11 @@ export default function App() {
           next,
           includedPages(),
           pageMetrics,
-          pageMetrics[currentPage],
+          pageMetrics[currentPage] ?? pageMetrics[1] ?? Object.values(pageMetrics)[0],
         );
+        if (stamped.length > next.length) {
+          replaceBoxes(next, false);
+        }
         replaceBoxes(stamped);
         setActiveTemplate(matched ?? null);
         setStatus(
@@ -467,7 +492,8 @@ export default function App() {
         return;
       }
       if (plan.kind === "apply-match") {
-        const fallback = pageMetrics[currentPage] ?? pageMetrics[1];
+        const fallback =
+          pageMetrics[currentPage] ?? pageMetrics[1] ?? Object.values(pageMetrics)[0];
         if (fallback) {
           applyTemplate(plan.template);
         } else {
@@ -510,6 +536,18 @@ export default function App() {
   }, [workingPath, pageCount]);
 
   useEffect(() => {
+    if (!pdf?.data || pageCount < 1) return;
+    let cancelled = false;
+    void pdfPageMetrics(pdf.data, pdf.password).then(({ metrics }) => {
+      if (cancelled) return;
+      setPageMetrics((current) => ({ ...metrics, ...current }));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [pdf?.data, pdf?.password, pageCount]);
+
+  useEffect(() => {
     if (!unlocking || pageCount < 1 || isTauri()) return;
     unlockingRef.current = false;
     setUnlocking(false);
@@ -519,7 +557,7 @@ export default function App() {
   useEffect(() => {
     const pending = pendingApply.current;
     if (!pending || pageCount < 1) return;
-    const fallback = pageMetrics[currentPage] ?? pageMetrics[1];
+    const fallback = pageMetrics[currentPage] ?? pageMetrics[1] ?? Object.values(pageMetrics)[0];
     if (!fallback) return;
     pendingApply.current = null;
     applyTemplate(pending);
@@ -686,6 +724,10 @@ export default function App() {
               setActiveTemplate(null);
               setStatus("");
             }}
+            canRepeat={
+              pageCount > 1 && selections.some((selection) => selection.page === currentPage)
+            }
+            onRepeat={repeatCurrentPage}
             onAutodetect={() => void autodetect()}
             onContinue={() => setStep("review")}
             onChangePdf={() => void changePdf()}

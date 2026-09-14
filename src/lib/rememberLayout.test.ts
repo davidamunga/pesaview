@@ -5,6 +5,7 @@ import {
   planAutodetect,
   rememberCopy,
   rememberedAreas,
+  repeatPageSelections,
   stampSelectionsToEmptyPages,
   suggestLayout,
 } from "./rememberLayout";
@@ -96,6 +97,17 @@ describe("stampSelectionsToEmptyPages", () => {
     expect(stamped.map((item) => item.page).sort((a, b) => a - b)).toEqual([1, 2, 3]);
     expect(stamped.find((item) => item.page === 3)?.top).toBeCloseTo(later.top);
     expect(stamped.find((item) => item.page === 1)?.top).toBeCloseTo(box.top);
+  });
+});
+
+describe("repeatPageSelections", () => {
+  it("replaces boxes on the other pages with the current page’s box", () => {
+    const later: Selection = { ...box, id: "b", page: 2, top: 79.2, bottom: 700 };
+    const next = repeatPageSelections([box, later], 2, [1, 2, 3], { 1: page, 2: page }, page);
+    expect(next.filter((item) => item.page === 2)).toEqual([later]);
+    expect(next.find((item) => item.page === 1)?.top).toBeCloseTo(later.top);
+    expect(next.find((item) => item.page === 3)?.top).toBeCloseTo(later.top);
+    expect(next.find((item) => item.id === "a")).toBeUndefined();
   });
 });
 

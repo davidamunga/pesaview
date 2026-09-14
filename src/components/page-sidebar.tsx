@@ -24,6 +24,7 @@ export function PageSidebar({
   onExclude,
 }: PageSidebarProps) {
   const includedCount = pageCount - excludedPages.size;
+  const fallbackMetrics = pageMetrics[currentPage] ?? Object.values(pageMetrics)[0];
 
   return (
     <aside className="flex h-full w-28 shrink-0 flex-col border-r bg-card">
@@ -32,7 +33,7 @@ export function PageSidebar({
           const page = index + 1;
           const excluded = excludedPages.has(page);
           const pageSelections = selections.filter((selection) => selection.page === page);
-          const metrics = pageMetrics[page];
+          const metrics = pageMetrics[page] ?? fallbackMetrics;
           const lastIncluded = !excluded && includedCount <= 1;
           return (
             <div
