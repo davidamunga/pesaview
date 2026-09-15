@@ -25,6 +25,7 @@ import {
 import { applyTemplateArea } from "@/lib/coordinates";
 import { matchTemplate } from "@/lib/matchTemplate";
 import { jobsFromPicked, type BatchJob } from "@/lib/batchJob";
+import type { ExtractProgress } from "@/lib/extractWait";
 import { pickPdf, type PickedPdf } from "@/lib/pickPdf";
 import { pdfDocumentFile } from "@/lib/pdfSource";
 import { pdfPageMetrics } from "@/lib/pdfPageMetrics";
@@ -565,6 +566,7 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pageMetrics, currentPage, pageCount]);
 
+  const [extractProgress, setExtractProgress] = useState<ExtractProgress | null>(null);
   const extractQuery = useQuery({
     queryKey: [
       "extract",
@@ -576,12 +578,20 @@ export default function App() {
       activeTemplate?.columns,
       activeTemplate?.mergeRows,
     ],
-    queryFn: () =>
-      TabulaService.extractTables(workingPath!, areas, pdf?.password, {
-        skipRows: activeTemplate?.skipRows,
-        columns: activeTemplate?.columns,
-        mergeRows: activeTemplate?.mergeRows,
-      }),
+    queryFn: () => {
+      setExtractProgress(null);
+      return TabulaService.extractTables(
+        workingPath!,
+        areas,
+        pdf?.password,
+        {
+          skipRows: activeTemplate?.skipRows,
+          columns: activeTemplate?.columns,
+          mergeRows: activeTemplate?.mergeRows,
+        },
+        setExtractProgress,
+      );
+    },
     enabled: step === "review" && isTauri() && Boolean(workingPath) && areas.length > 0,
   });
 
@@ -869,6 +879,7 @@ export default function App() {
           tables={extractQuery.data ?? []}
           fileName={pdf.name}
           loading={extractQuery.isFetching}
+          extractProgress={extractProgress}
           error={extractError}
           canExtract={isTauri()}
           templateName={activeTemplate?.name}

@@ -47,7 +47,7 @@ export function TemplatesMenu({
       <DropdownMenu>
         <DropdownMenuTrigger
           render={
-            <Button variant="outline" size="xs" disabled={disabled}>
+            <Button variant="ghost" size="xs" disabled={disabled}>
               <LayoutTemplate />
               Templates
             </Button>

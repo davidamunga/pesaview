@@ -3,21 +3,30 @@
   "name": "M-PESA statement",
   "normalized": true,
   "match": ["receipt no", "completion", "paid in"],
-  "skipRows": ["Disclaimer", "Note:"],
+  "skipRows": ["Disclaimer", "Note:", "Statement Verification"],
+  "columns": [
+    "Receipt No.",
+    "Completion Time",
+    "Details",
+    "Transaction Status",
+    "Paid In",
+    "Withdrawn",
+    "Balance"
+  ],
   "areas": [
     {
       "page": 1,
-      "top": 0.32,
+      "top": 0.43,
       "left": 0.04,
-      "bottom": 0.94,
+      "bottom": 0.88,
       "right": 0.96,
       "method": "stream"
     },
     {
       "page": 0,
-      "top": 0.12,
+      "top": 0.06,
       "left": 0.04,
-      "bottom": 0.94,
+      "bottom": 0.88,
       "right": 0.96,
       "method": "stream"
     }

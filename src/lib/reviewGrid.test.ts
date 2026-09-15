@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   applyReviewEdits,
+  columnShift,
   columnSuspects,
+  classifyCell,
   correctionsFromEdits,
   droppedRowLabel,
   editKey,
@@ -101,6 +103,70 @@ describe("reviewGrid", () => {
     expect(isDateColumn("Date")).toBe(true);
     expect(isDateColumn("Value Date")).toBe(true);
     expect(isDateColumn("Debit")).toBe(false);
+  });
+
+  it("flags an M-PESA extract whose headers have slipped one column", () => {
+    const rows = [
+      {
+        id: "1",
+        page: 3,
+        cells: [
+          "UGIL8BTU6U 2026-07-18 11:32",
+          "Customer Transfer Fuliza M-Pesa",
+          "Completed",
+          "",
+          "0.00",
+          "50.00",
+          "0.00",
+        ],
+      },
+      {
+        id: "2",
+        page: 3,
+        cells: [
+          "UGHL8BS0VF 2026-07-17 19:01",
+          "Customer Send Money to Micro",
+          "Completed",
+          "",
+          "0.00",
+          "70.00",
+          "0.00",
+        ],
+      },
+      {
+        id: "3",
+        page: 3,
+        cells: [
+          "UGHL8BS3HH 2026-07-17 15:44",
+          "OverDraft of Credit Party",
+          "Completed",
+          "",
+          "50.00",
+          "0.00",
+          "50.00",
+        ],
+      },
+    ];
+    const shift = columnShift(
+      ["Receipt No.", "Completion Time", "Details", "Transaction Status", "Paid In", "Withdrawn", "Balance"],
+      rows,
+    );
+    expect(shift.shifted).toBe(true);
+    expect(shift.mismatches.map((item) => item.index)).toEqual([1, 2]);
+    expect(classifyCell("Completed")).toBe("status");
+    expect(classifyCell("UGIL8BTU6U 2026-07-18 11:32")).toBe("receipt");
+  });
+
+  it("does not flag a grid whose headers match the cells", () => {
+    const rows = [
+      { id: "1", page: 1, cells: ["UGLL809YEK", "2026-07-21 15:41:59", "Merchant Payment", "Completed", "0.00"] },
+      { id: "2", page: 1, cells: ["UGLL808J0X", "2026-07-21 09:33:35", "Customer Send Money", "Completed", "50.00"] },
+      { id: "3", page: 1, cells: ["NA8027AH68", "2019-01-08 17:51:09", "M-Shwari Withdraw", "Completed", "800.00"] },
+    ];
+    expect(
+      columnShift(["Receipt No.", "Completion Time", "Details", "Transaction Status", "Paid In"], rows)
+        .shifted,
+    ).toBe(false);
   });
 
   it("finds a row by page, story, or amount without commas", () => {

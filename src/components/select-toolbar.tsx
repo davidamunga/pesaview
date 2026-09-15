@@ -73,140 +73,149 @@ export function SelectToolbar({
   headingRef,
 }: SelectToolbarProps) {
   return (
-    <div className="flex shrink-0 flex-nowrap items-center gap-2.5 overflow-x-auto bg-background px-3 py-1.5">
+    <div className="flex shrink-0 items-center gap-2 bg-background px-3 py-1.5">
       {headingRef ? (
         <h1 ref={headingRef} tabIndex={-1} className="sr-only outline-none">
           Select tables
         </h1>
       ) : null}
-      <Button variant="ghost" size="xs" disabled={busy} onClick={onChangePdf}>
-        Change PDF
-      </Button>
-      <Button
-        variant="ghost"
-        size="xs"
-        disabled={busy || !canUndo}
-        title={`Undo box (${undoShortcut})`}
-        aria-keyshortcuts={undoShortcut}
-        onClick={onUndo}
-      >
-        <Undo2 />
-        Undo
-      </Button>
-      <Button
-        variant="ghost"
-        size="xs"
-        disabled={busy || !canRedo}
-        title={`Redo box (${redoShortcut})`}
-        aria-keyshortcuts={redoShortcut}
-        onClick={onRedo}
-      >
-        <Redo2 />
-        Redo
-      </Button>
-      <div className="flex items-center gap-0.5">
+      <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+        <Button variant="ghost" size="xs" disabled={busy} onClick={onChangePdf}>
+          Change PDF
+        </Button>
         <Button
           variant="ghost"
           size="icon-xs"
-          disabled={zoom <= 0.5}
-          title="Zoom out"
-          aria-label="Zoom out"
-          onClick={onZoomOut}
+          disabled={busy || !canUndo}
+          title={`Undo box (${undoShortcut})`}
+          aria-label={`Undo box (${undoShortcut})`}
+          aria-keyshortcuts={undoShortcut}
+          onClick={onUndo}
         >
-          <Minus />
+          <Undo2 />
         </Button>
-        <button
-          type="button"
-          title="Fit page"
-          aria-label={zoom === 1 ? "Page is fitted" : "Fit page"}
-          className="h-7 min-w-11 rounded-md px-1 text-xs tabular-nums text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-          onClick={onZoomFit}
-        >
-          {Math.round(zoom * 100) === 100 ? "Fit" : `${Math.round(zoom * 100)}%`}
-        </button>
         <Button
           variant="ghost"
           size="icon-xs"
-          disabled={zoom >= 4}
-          title="Zoom in"
-          aria-label="Zoom in"
-          onClick={onZoomIn}
+          disabled={busy || !canRedo}
+          title={`Redo box (${redoShortcut})`}
+          aria-label={`Redo box (${redoShortcut})`}
+          aria-keyshortcuts={redoShortcut}
+          onClick={onRedo}
         >
-          <Plus />
+          <Redo2 />
         </Button>
-      </div>
-      {method === "lattice" && (
-        <p className="text-xs text-muted-foreground">Using ruled lines</p>
-      )}
-      <div className="ml-auto flex shrink-0 flex-nowrap items-center justify-end gap-2">
-        <TemplatesMenu
-          templates={templates}
-          disabled={busy}
-          canSave={selectionCount > 0}
-          onApply={onApplyTemplate}
-          onSave={onSaveTemplate}
-        />
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            render={
-              <Button variant="ghost" size="xs" disabled={busy} title="If columns look wrong">
-                Columns
-              </Button>
-            }
-          />
-          <DropdownMenuContent align="end" className="w-56">
-            <DropdownMenuGroup>
-              <DropdownMenuLabel>How text is read</DropdownMenuLabel>
-              <DropdownMenuItem onClick={() => onMethodChange("stream")}>
-                {method === "stream" ? <Check /> : <span className="size-4" />}
-                Stream — flowing text
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => onMethodChange("lattice")}>
-                {method === "lattice" ? <Check /> : <span className="size-4" />}
-                Lattice — ruled lines
-              </DropdownMenuItem>
-            </DropdownMenuGroup>
-          </DropdownMenuContent>
-        </DropdownMenu>
-        {canRepeat && onRepeat && (
+        <div className="flex items-center">
           <Button
-            variant="outline"
-            size="xs"
-            disabled={busy}
-            title="Copy this page’s box onto the other pages"
-            onClick={onRepeat}
+            variant="ghost"
+            size="icon-xs"
+            disabled={zoom <= 0.5}
+            title="Zoom out"
+            aria-label="Zoom out"
+            onClick={onZoomOut}
           >
-            <Copy />
-            Use on all pages
+            <Minus />
           </Button>
-        )}
-        {canAutodetect && (
-          <Button variant="outline" size="xs" disabled={busy} onClick={onAutodetect}>
-            <Zap />
-            {busy ? "Finding…" : "Autodetect"}
+          <button
+            type="button"
+            title="Fit page"
+            aria-label={zoom === 1 ? "Page is fitted" : "Fit page"}
+            className="h-7 min-w-9 rounded-md px-1 text-xs tabular-nums text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+            onClick={onZoomFit}
+          >
+            {Math.round(zoom * 100) === 100 ? "Fit" : `${Math.round(zoom * 100)}%`}
+          </button>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            disabled={zoom >= 4}
+            title="Zoom in"
+            aria-label="Zoom in"
+            onClick={onZoomIn}
+          >
+            <Plus />
           </Button>
+        </div>
+        {method === "lattice" && (
+          <p className="hidden text-xs text-muted-foreground sm:inline">Ruled lines</p>
         )}
-        {selectionCount > 0 && (
-          <Button variant="outline" size="xs" disabled={busy} onClick={onClear}>
-            <CircleX />
-            Clear boxes
-          </Button>
-        )}
-        {!canContinue && (
-          <p id="continue-hint" className="sr-only">
-            {continueHint}
-          </p>
-        )}
-        <Button
-          disabled={!canContinue}
-          aria-describedby={!canContinue ? "continue-hint" : undefined}
-          title={!canContinue ? continueHint : undefined}
-          size="xs"
-          onClick={onContinue}
-        >
-          Continue
-        </Button>
+        <div className="ml-auto flex items-center gap-1">
+          <TemplatesMenu
+            templates={templates}
+            disabled={busy}
+            canSave={selectionCount > 0}
+            onApply={onApplyTemplate}
+            onSave={onSaveTemplate}
+          />
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <Button variant="ghost" size="xs" disabled={busy} title="If columns look wrong">
+                  Columns
+                </Button>
+              }
+            />
+            <DropdownMenuContent align="end" className="w-56">
+              <DropdownMenuGroup>
+                <DropdownMenuLabel>How text is read</DropdownMenuLabel>
+                <DropdownMenuItem onClick={() => onMethodChange("stream")}>
+                  {method === "stream" ? <Check /> : <span className="size-4" />}
+                  Stream — flowing text
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => onMethodChange("lattice")}>
+                  {method === "lattice" ? <Check /> : <span className="size-4" />}
+                  Lattice — ruled lines
+                </DropdownMenuItem>
+              </DropdownMenuGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          {canAutodetect && (
+            <Button variant="ghost" size="xs" disabled={busy} onClick={onAutodetect}>
+              <Zap />
+              {busy ? "Finding…" : "Autodetect"}
+            </Button>
+          )}
+          {canRepeat && onRepeat && (
+            <Button
+              variant="ghost"
+              size="xs"
+              disabled={busy}
+              title="Copy this page’s box onto the other pages"
+              onClick={onRepeat}
+            >
+              <Copy />
+              All pages
+            </Button>
+          )}
+          {selectionCount > 0 && (
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              disabled={busy}
+              title="Clear boxes"
+              aria-label="Clear boxes"
+              onClick={onClear}
+            >
+              <CircleX />
+            </Button>
+          )}
+        </div>
       </div>
+      {!canContinue && (
+        <p id="continue-hint" className="sr-only">
+          {continueHint}
+        </p>
+      )}
+      <Button
+        className="shrink-0"
+        disabled={!canContinue}
+        aria-describedby={!canContinue ? "continue-hint" : undefined}
+        title={!canContinue ? continueHint : undefined}
+        size="xs"
+        onClick={onContinue}
+      >
+        Continue
+      </Button>
     </div>
   );
 }

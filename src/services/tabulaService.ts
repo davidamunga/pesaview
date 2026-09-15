@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { detectTransactionAreas } from "@/lib/detectTables";
+import type { ExtractProgress } from "@/lib/extractWait";
 import { GUESS_PAGE_LIMIT } from "@/lib/rememberLayout";
 import { tablesFromTabulaJson } from "@/lib/tabulaJson";
 import { tabulaTimeoutMs } from "@/lib/tabulaTimeout";
@@ -22,16 +24,22 @@ export class TabulaService {
     areas: TableArea[],
     password?: string,
     options: ExtractOptions = {},
+    onProgress?: (progress: ExtractProgress) => void,
   ): Promise<ExtractedTable[]> {
-    const raw = await withTimeout(
-      invoke<string>("extract_tables", {
-        pdfPath,
-        password: password || null,
-        areas,
-      }),
-      tabulaTimeoutMs("extract", areas.length),
-    );
-    return tablesFromTabulaJson(raw, options);
+    const stop = onProgress ? await listenExtractProgress(onProgress) : undefined;
+    try {
+      const raw = await withTimeout(
+        invoke<string>("extract_tables", {
+          pdfPath,
+          password: password || null,
+          areas,
+        }),
+        tabulaTimeoutMs("extract", areas.length),
+      );
+      return tablesFromTabulaJson(raw, options);
+    } finally {
+      stop?.();
+    }
   }
 
   static async guessTables(
@@ -56,6 +64,18 @@ export class TabulaService {
     } catch {
       // Best-effort cancel.
     }
+  }
+}
+
+async function listenExtractProgress(
+  onProgress: (progress: ExtractProgress) => void,
+): Promise<() => void> {
+  try {
+    return await listen<ExtractProgress>("extract-progress", (event) => {
+      onProgress(event.payload);
+    });
+  } catch {
+    return () => undefined;
   }
 }
 

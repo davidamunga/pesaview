@@ -5,8 +5,8 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 
-use tauri::Manager;
-use tauri::State;
+use serde::Serialize;
+use tauri::{Emitter, Manager, State};
 
 use crate::tabula::{
     assign_missing_pages, format_page_spec, group_areas, method_flag, parse_page_spec, TableArea,
@@ -210,6 +210,29 @@ fn cancel_extraction(active_pid: State<'_, ActivePid>) {
     }
 }
 
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExtractProgress {
+    done: u32,
+    total: u32,
+    page_from: u32,
+    page_to: u32,
+}
+
+fn emit_extract_progress(app_handle: &tauri::AppHandle, done: usize, total: usize, pages: &[u32]) {
+    let page_from = pages.first().copied().unwrap_or(1);
+    let page_to = pages.last().copied().unwrap_or(page_from);
+    let _ = app_handle.emit(
+        "extract-progress",
+        ExtractProgress {
+            done: done as u32,
+            total: total.max(1) as u32,
+            page_from,
+            page_to,
+        },
+    );
+}
+
 fn extract_tables_sync(
     app_handle: &tauri::AppHandle,
     active_pid: &ActivePid,
@@ -218,6 +241,7 @@ fn extract_tables_sync(
     areas: Vec<TableArea>,
 ) -> Result<String, String> {
     if areas.is_empty() {
+        emit_extract_progress(app_handle, 0, 1, &[1]);
         return run_tabula(
             app_handle,
             active_pid,
@@ -228,10 +252,18 @@ fn extract_tables_sync(
     }
 
     let groups = group_areas(&areas);
+    let total: usize = groups
+        .iter()
+        .map(|group| group.pages.chunks(PAGES_PER_TABULA_RUN).len())
+        .sum::<usize>()
+        .max(1);
     let mut combined: Vec<serde_json::Value> = Vec::new();
+    let mut index = 0;
 
     for group in groups {
         for chunk in group.pages.chunks(PAGES_PER_TABULA_RUN) {
+            emit_extract_progress(app_handle, index, total, chunk);
+            index += 1;
             let page_arg = format_page_spec(chunk);
             let mut extra: Vec<String> = vec![
                 "-f".into(),
