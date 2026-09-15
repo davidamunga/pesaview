@@ -3,6 +3,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { readFile } from "@tauri-apps/plugin-fs";
 import { Button } from "@/components/ui/button";
 import { pickPdf, pickPdfs, pdfPathsFromDrop, pickedFromPath, type PickedPdf } from "@/lib/pickPdf";
+import { AUTHOR_NAME, AUTHOR_URL, openExternal } from "@/lib/appMeta";
 import { cn, isTauri } from "@/lib/utils";
 import type { OpenedPdf } from "@/types";
 
@@ -230,6 +231,16 @@ export function FileOpener({
         {error ? (
           <p className="text-sm text-destructive">{error}</p>
         ) : null}
+        <p className="mt-auto text-sm text-muted-foreground">
+          By{" "}
+          <button
+            type="button"
+            className="underline-offset-2 hover:text-foreground hover:underline"
+            onClick={() => void openExternal(AUTHOR_URL)}
+          >
+            {AUTHOR_NAME}
+          </button>
+        </p>
       </div>
     </div>
   );

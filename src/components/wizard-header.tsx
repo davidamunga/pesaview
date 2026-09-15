@@ -1,6 +1,8 @@
 import { AppBrand } from "@/components/app-brand";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { UpdateChecker } from "@/components/update-checker";
+import { Button } from "@/components/ui/button";
+import { FEEDBACK_URL, openExternal } from "@/lib/appMeta";
 import { cn } from "@/lib/utils";
 import type { WizardStep } from "@/types";
 
@@ -71,6 +73,14 @@ export function WizardHeader({ step, canSelect, canReview, fileName, onStep }: W
       </nav>
 
       <div className="flex h-7 items-center justify-end gap-1.5 pr-4">
+        <Button
+          variant="ghost"
+          size="xs"
+          className="text-muted-foreground"
+          onClick={() => void openExternal(FEEDBACK_URL)}
+        >
+          Feedback
+        </Button>
         <UpdateChecker showButton />
         <ThemeToggle />
       </div>
