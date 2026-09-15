@@ -1,4 +1,4 @@
-@import "@fontsource-variable/overpass/wght.css";
+@import "@fontsource-variable/inter/wght.css";
 @import "@fontsource/source-serif-4/latin-400.css";
 @import "@fontsource/source-serif-4/latin-500.css";
 @import "tailwindcss";
@@ -41,9 +41,9 @@
   --color-sidebar-ring: var(--sidebar-ring);
   --color-success: var(--success);
   --color-success-foreground: var(--success-foreground);
-  --font-sans: "Overpass Variable", Overpass, sans-serif;
+  --font-sans: "Inter Variable", Inter, sans-serif;
   --font-serif: "Source Serif 4", "Source Serif", serif;
-  --font-heading: "Overpass Variable", Overpass, sans-serif;
+  --font-heading: "Inter Variable", Inter, sans-serif;
 }
 
 :root {
