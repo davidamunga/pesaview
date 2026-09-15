@@ -1,5 +1,25 @@
 # pesaview
 
+## 0.3.0
+
+### Minor Changes
+
+- [#10](https://github.com/davidamunga/pesaview/pull/10) [`f9e4e5e`](https://github.com/davidamunga/pesaview/commit/f9e4e5e16a0fb1d0b7005fd6cf583c2e7cad2c33) Thanks [@davidamunga](https://github.com/davidamunga)! - Extract several statements in one go. Pick the PDFs, pick a folder, and get one CSV or Excel per file without opening Review for each.
+
+### Patch Changes
+
+- [#10](https://github.com/davidamunga/pesaview/pull/10) [`f9e4e5e`](https://github.com/davidamunga/pesaview/commit/f9e4e5e16a0fb1d0b7005fd6cf583c2e7cad2c33) Thanks [@davidamunga](https://github.com/davidamunga)! - Finish decade-long statements: remembered layouts stamp every page, Tabula no longer dies at 90 seconds, and Review can scroll tens of thousands of rows.
+
+- [#10](https://github.com/davidamunga/pesaview/pull/10) [`a39e1c4`](https://github.com/davidamunga/pesaview/commit/a39e1c4060cddef1b169de909606744a436b021e) Thanks [@davidamunga](https://github.com/davidamunga)! - Keep M-PESA receipt numbers and completion times in their own columns, and fold a wrapped time on the next page back onto that receipt.
+
+- [#10](https://github.com/davidamunga/pesaview/pull/10) [`a39e1c4`](https://github.com/davidamunga/pesaview/commit/a39e1c4060cddef1b169de909606744a436b021e) Thanks [@davidamunga](https://github.com/davidamunga)! - Keep every M-PESA transaction on a long statement: page 1 starts after the summary, later pages start at the first receipt, and the footer is left out.
+
+- [#10](https://github.com/davidamunga/pesaview/pull/10) [`ad6e803`](https://github.com/davidamunga/pesaview/commit/ad6e8030c65367793b8402292edbc4540205e576) Thanks [@davidamunga](https://github.com/davidamunga)! - Use the current page’s table box on every other page, and show those boxes in the sidebar before every thumbnail has finished rendering.
+
+- [#10](https://github.com/davidamunga/pesaview/pull/10) [`a39e1c4`](https://github.com/davidamunga/pesaview/commit/a39e1c4060cddef1b169de909606744a436b021e) Thanks [@davidamunga](https://github.com/davidamunga)! - On Review, say when headers don’t match the cells, keep Export quiet until that’s checked, and make dropping a row obvious without hovering.
+
+- [#10](https://github.com/davidamunga/pesaview/pull/10) [`a39e1c4`](https://github.com/davidamunga/pesaview/commit/a39e1c4060cddef1b169de909606744a436b021e) Thanks [@davidamunga](https://github.com/davidamunga)! - Keep Continue visible on the Tables bar, and show Review filling in while a long statement is read — with page progress instead of a blank wait.
+
 ## 0.2.2
 
 ### Patch Changes
