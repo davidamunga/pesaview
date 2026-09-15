@@ -1,6 +1,8 @@
-import { PesaViewLogo } from "@/components/pesaview-logo";
+import { AppBrand } from "@/components/app-brand";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { UpdateChecker } from "@/components/update-checker";
+import { Button } from "@/components/ui/button";
+import { FEEDBACK_URL, openExternal } from "@/lib/appMeta";
 import { cn } from "@/lib/utils";
 import type { WizardStep } from "@/types";
 
@@ -31,8 +33,7 @@ export function WizardHeader({ step, canSelect, canReview, fileName, onStep }: W
       className="window-chrome grid h-14 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-6 bg-chrome select-none shadow-[inset_0_-1px_0_0_color-mix(in_oklch,var(--foreground)_8%,transparent)]"
     >
       <div className="flex min-w-0 items-center gap-3 pl-3">
-        <PesaViewLogo className="size-7 shrink-0" />
-        <p className="shrink-0 text-base leading-none font-semibold tracking-tight">PesaView</p>
+        <AppBrand />
         {fileName ? (
           <>
             <span className="text-muted-foreground/40 leading-none" aria-hidden>
@@ -72,6 +73,14 @@ export function WizardHeader({ step, canSelect, canReview, fileName, onStep }: W
       </nav>
 
       <div className="flex h-7 items-center justify-end gap-1.5 pr-4">
+        <Button
+          variant="ghost"
+          size="xs"
+          className="text-muted-foreground"
+          onClick={() => void openExternal(FEEDBACK_URL)}
+        >
+          Feedback
+        </Button>
         <UpdateChecker showButton />
         <ThemeToggle />
       </div>
