@@ -1,13 +1,15 @@
-import { useEffect, useState, type RefObject } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { readFile } from "@tauri-apps/plugin-fs";
 import { Button } from "@/components/ui/button";
-import { pickPdf } from "@/lib/pickPdf";
-import { cn } from "@/lib/utils";
+import { pickPdf, pickPdfs, pdfPathsFromDrop, pickedFromPath, type PickedPdf } from "@/lib/pickPdf";
+import { cn, isTauri } from "@/lib/utils";
 import type { OpenedPdf } from "@/types";
 
 interface FileOpenerProps {
   onOpen: (pdf: OpenedPdf) => void;
+  onBatch?: (picked: PickedPdf[]) => void;
+  onBackToBatch?: () => void;
   busy?: boolean;
   currentFile?: { name: string; pageCount?: number };
   onKeepFile?: () => void;
@@ -16,13 +18,20 @@ interface FileOpenerProps {
 
 export function FileOpener({
   onOpen,
+  onBatch,
+  onBackToBatch,
   busy,
   currentFile,
   onKeepFile,
   headingRef,
 }: FileOpenerProps) {
   const [dragActive, setDragActive] = useState(false);
+  const [dragCount, setDragCount] = useState(0);
   const [error, setError] = useState("");
+  const onOpenRef = useRef(onOpen);
+  const onBatchRef = useRef(onBatch);
+  onOpenRef.current = onOpen;
+  onBatchRef.current = onBatch;
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -31,20 +40,28 @@ export function FileOpener({
       try {
         const webview = getCurrentWebview();
         unlisten = await webview.onDragDropEvent((event) => {
-          if (event.payload.type === "over") {
+          if (event.payload.type === "enter") {
+            setDragActive(true);
+            setDragCount(pdfPathsFromDrop(event.payload.paths).length);
+          } else if (event.payload.type === "over") {
             setDragActive(true);
           } else if (event.payload.type === "drop") {
             setDragActive(false);
-            const pdfPath = event.payload.paths.find((path) =>
-              path.toLowerCase().endsWith(".pdf"),
-            );
-            if (pdfPath) {
-              void openFromPath(pdfPath);
-            } else {
+            setDragCount(0);
+            const pdfs = pdfPathsFromDrop(event.payload.paths);
+            if (pdfs.length === 0) {
               setError("Drop a PDF statement to continue.");
+              return;
             }
+            if (pdfs.length > 1 && onBatchRef.current) {
+              setError("");
+              onBatchRef.current(pdfs.map(pickedFromPath));
+              return;
+            }
+            void openFromPath(pdfs[0]);
           } else {
             setDragActive(false);
+            setDragCount(0);
           }
         });
       } catch {
@@ -60,8 +77,8 @@ export function FileOpener({
     setError("");
     try {
       const data = await readFile(path);
-      const name = path.split(/[\\/]/).pop() || "statement.pdf";
-      onOpen({ path, name, data });
+      const picked = pickedFromPath(path);
+      onOpenRef.current({ ...picked, data });
     } catch {
       setError("Could not read that PDF. Try Browse instead.");
     }
@@ -77,7 +94,32 @@ export function FileOpener({
     }
   };
 
+  const browseSeveral = async () => {
+    setError("");
+    if (!isTauri() || !onBatch) {
+      setError("Extracting several statements needs the desktop app.");
+      return;
+    }
+    try {
+      const picked = await pickPdfs();
+      if (!picked || picked.length === 0) return;
+      if (picked.length === 1) {
+        void openFromPath(picked[0].path);
+        return;
+      }
+      onBatch(picked);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not read those PDFs.");
+    }
+  };
+
   const HeadingTag = headingRef ? "h1" : "p";
+  const dropHint =
+    dragActive && dragCount > 1
+      ? "Release to open these statements"
+      : dragActive
+        ? "Release to open"
+        : "Drop a PDF here";
 
   if (currentFile) {
     return (
@@ -113,6 +155,11 @@ export function FileOpener({
               <Button variant="outline" disabled={busy} onClick={() => void browse()}>
                 Replace PDF…
               </Button>
+              {onBackToBatch ? (
+                <Button variant="ghost" disabled={busy} onClick={onBackToBatch}>
+                  Back to batch
+                </Button>
+              ) : null}
             </div>
           </div>
           {error ? (
@@ -149,19 +196,31 @@ export function FileOpener({
           onClick={() => void browse()}
         >
           <div className="flex flex-1 flex-col items-start justify-center gap-4 px-6 py-8">
-            <p className="text-lg leading-none font-medium">
-              {dragActive ? "Release to open" : "Drop a PDF here"}
-            </p>
+            <p className="text-lg leading-none font-medium">{dropHint}</p>
             {!dragActive ? (
-              <Button
-                disabled={busy}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  void browse();
-                }}
-              >
-                Browse PDF
-              </Button>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  disabled={busy}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void browse();
+                  }}
+                >
+                  Browse PDF
+                </Button>
+                {onBatch && isTauri() ? (
+                  <Button
+                    variant="outline"
+                    disabled={busy}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void browseSeveral();
+                    }}
+                  >
+                    Several statements…
+                  </Button>
+                ) : null}
+              </div>
             ) : null}
           </div>
           <p className="px-6 pb-4 text-sm text-muted-foreground">

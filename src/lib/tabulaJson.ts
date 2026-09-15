@@ -26,6 +26,9 @@ function cellText(cell: { text?: string } | string | null | undefined): string[]
 
 function looksLikeHeader(row: string[]): boolean {
   if (row.length === 0) return false;
+  const lead = (row[0] ?? "").trim();
+  if (!lead) return false;
+  if (LEADING_ID.test(lead) || DATE.test(lead)) return false;
   const nonempty = row.filter(Boolean);
   if (nonempty.length === 0) return false;
   const numeric = nonempty.filter((value) => /^-?[\d,.]+$/.test(value)).length;
@@ -47,33 +50,75 @@ function shouldSkip(row: string[], extra: string[] = []): boolean {
 
 const DATE =
   /(?:\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}|\d{4}[-/.]\d{1,2}[-/.]\d{1,2})(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?/;
-const AMOUNT = /[\d,]+\.\d{2}/;
 const LEADING_ID = /^[A-Z]{1,5}[A-Z0-9]*\d[A-Z0-9]*$/i;
 
+const CLOCK = /^\d{1,2}:\d{2}(?::\d{2})?$/;
+
 export function hasRowAnchor(row: string[]): boolean {
-  if (row.some((cell) => DATE.test(cell) || AMOUNT.test(cell.trim()))) {
+  const lead = row[0]?.trim() ?? "";
+  const time = row[1]?.trim() ?? "";
+  if (DATE.test(lead) || DATE.test(time)) return true;
+  const money = row.length >= 5 ? row.slice(-3) : row.slice(-1);
+  if (money.some((cell) => /^\s*-?[\d,]+\.\d{2}\s*(?:cr|dr)?\s*$/i.test(cell))) {
     return true;
   }
-  const lead = row[0]?.trim() ?? "";
   return lead.length >= 8 && lead.length <= 14 && LEADING_ID.test(lead);
+}
+
+function isContinuationRow(row: string[]): boolean {
+  if (!row.some((cell) => cell.trim().length > 0)) return false;
+  const lead = row[0]?.trim() ?? "";
+  const clock = row[1]?.trim() ?? "";
+  if (!lead && CLOCK.test(clock)) return true;
+  return !hasRowAnchor(row);
+}
+
+function foldInto(previous: string[], extra: string[]): void {
+  for (let index = 0; index < extra.length; index += 1) {
+    const bit = extra[index]?.trim();
+    if (!bit) continue;
+    const current = previous[index]?.trim() ?? "";
+    previous[index] = current ? `${current} ${bit}` : bit;
+  }
 }
 
 export function mergeContinuationRows(rows: string[][]): string[][] {
   const merged: string[][] = [];
   for (const row of rows) {
-    if (merged.length > 0 && !hasRowAnchor(row) && row.some((cell) => cell.trim().length > 0)) {
-      const previous = merged[merged.length - 1];
-      for (let index = 0; index < row.length; index += 1) {
-        const extra = row[index]?.trim();
-        if (!extra) continue;
-        const current = previous[index]?.trim() ?? "";
-        previous[index] = current ? `${current} ${extra}` : extra;
-      }
+    if (merged.length > 0 && isContinuationRow(row)) {
+      foldInto(merged[merged.length - 1], row);
       continue;
     }
     merged.push([...row]);
   }
   return merged;
+}
+
+function canFoldAcross(previous: string[], extra: string[]): boolean {
+  if (!isContinuationRow(extra)) return false;
+  const clock = extra[1]?.trim() ?? "";
+  if (CLOCK.test(clock) && /\d{1,2}:\d{2}/.test(previous[1] ?? "")) return false;
+  return true;
+}
+
+function mergeContinuationsAcrossTables(tables: ExtractedTable[]): ExtractedTable[] {
+  if (tables.length < 2) return tables;
+  const out: ExtractedTable[] = [];
+  for (const table of tables) {
+    const rows = table.rows.map((row) => [...row]);
+    const previous = out[out.length - 1];
+    while (
+      previous &&
+      previous.rows.length > 0 &&
+      rows.length > 0 &&
+      canFoldAcross(previous.rows[previous.rows.length - 1], rows[0])
+    ) {
+      foldInto(previous.rows[previous.rows.length - 1], rows.shift()!);
+    }
+    if (rows.length === 0) continue;
+    out.push({ ...table, rows });
+  }
+  return out;
 }
 
 /** Cluster Tabula `left` edges into column bands. Nearby edges are the same column. */
@@ -164,6 +209,28 @@ function bestHeaderLefts(tables: TabulaTable[]): number[] | null {
   return best;
 }
 
+const COLUMN_TITLE =
+  /^(receipt|completion|details|transaction|paid\s*in|withdrawn|balance|date|particulars|money\s*(in|out)|description|narration|status)/i;
+
+function isColumnTitleRow(texts: string[]): boolean {
+  return texts.filter((text) => COLUMN_TITLE.test(text.trim())).length >= 3;
+}
+
+/** Snap to min(header, first data row) so left-aligned cells aren't pulled into the previous column. */
+function alignHeaderBandsToContent(headerLefts: number[], tables: TabulaTable[]): number[] {
+  for (const table of tables) {
+    for (const row of table.data ?? []) {
+      const cells = positioned(row).filter((cell) => cleanCellText(cell.text));
+      if (cells.length !== headerLefts.length) continue;
+      const texts = cells.map((cell) => cleanCellText(cell.text));
+      if (isColumnTitleRow(texts)) continue;
+      const lefts = cells.map((cell) => cell.left).sort((a, b) => a - b);
+      return headerLefts.map((header, index) => Math.min(header, lefts[index]));
+    }
+  }
+  return headerLefts;
+}
+
 function hasUsableGeometry(lefts: number[]): boolean {
   if (lefts.length < 2) return false;
   return Math.max(...lefts) - Math.min(...lefts) > 40;
@@ -216,10 +283,15 @@ export function tablesFromTabulaJson(raw: string, options: ExtractOptions = {}):
   const tables = parseTabulaTables(raw);
   const headerBands = bestHeaderLefts(tables);
   const lefts = collectLefts(tables);
-  const bands = headerBands ?? (hasUsableGeometry(lefts) ? clusterColumnLefts(lefts) : null);
-  return tables
+  const bands = headerBands
+    ? alignHeaderBandsToContent(headerBands, tables)
+    : hasUsableGeometry(lefts)
+      ? clusterColumnLefts(lefts)
+      : null;
+  const extracted = tables
     .map((table) => finishTable(table, rowsFromTable(table, bands), options))
     .filter((table): table is ExtractedTable => table != null);
+  return options.mergeRows === false ? extracted : mergeContinuationsAcrossTables(extracted);
 }
 
 function padRow(row: string[], width: number): string[] {

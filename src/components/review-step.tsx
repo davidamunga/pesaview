@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
   applyReviewEdits,
+  columnShift,
   columnSuspects,
   correctionsFromEdits,
   droppedRowLabel,
@@ -17,11 +18,22 @@ import {
   reviewToTables,
   rowMatchesQuery,
   tablesToReview,
+  type CellKind,
+  type ColumnMismatch,
   type ColumnSuspect,
 } from "@/lib/reviewGrid";
-import { cn } from "@/lib/utils";
+import { windowedRange } from "@/lib/windowedRows";
+import {
+  formatElapsed,
+  readingDetail,
+  readingHeadline,
+  readingHint,
+  readingRatio,
+  type ExtractProgress,
+} from "@/lib/extractWait";
 import { exportCsv, exportXlsx } from "@/services/exportService";
 import type { ExtractedTable, ReviewRow } from "@/types";
+import { cn } from "@/lib/utils";
 
 const apple =
   typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.userAgent);
@@ -60,6 +72,7 @@ interface ReviewEditContextValue {
   original: ReviewRow[];
   visibleCount: number;
   suspects: ColumnSuspect[];
+  mismatches: ColumnMismatch[];
   rename: (index: number, next: string) => void;
   remove: (index: number) => void;
   dropRow: (id: string) => void;
@@ -76,13 +89,29 @@ function useReviewEdit() {
   return context;
 }
 
+function kindCopy(kind: CellKind): string {
+  if (kind === "status") return "status words";
+  if (kind === "narrative") return "details";
+  if (kind === "datetime") return "dates or times";
+  if (kind === "money") return "amounts";
+  return "receipts";
+}
+
 function ColumnHeader({ index }: { index: number }) {
-  const { names, sourceNames, visibleCount, suspects, rename, remove } = useReviewEdit();
+  const { names, sourceNames, visibleCount, suspects, mismatches, rename, remove } = useReviewEdit();
   const label = names[index] || `Column ${index + 1}`;
   const renamed = label !== (sourceNames[index] || `Column ${index + 1}`);
   const suspect = suspects.find((item) => item.index === index);
+  const mismatch = mismatches.find((item) => item.index === index);
   const money = isMoneyColumn(label);
   const lastColumn = visibleCount <= 1;
+  const note = mismatch
+    ? `Looks like ${kindCopy(mismatch.found)}`
+    : suspect
+      ? lastColumn
+        ? `${suspect.reason} · keep one`
+        : suspect.reason
+      : null;
 
   return (
     <div className="group/header flex min-w-0 flex-col gap-0.5">
@@ -93,11 +122,11 @@ function ColumnHeader({ index }: { index: number }) {
             "hover:border-current/25 focus-visible:border-current",
             money && "text-right tabular-nums",
             renamed && editedMark,
-            suspect && "border-amber-700/60 dark:border-amber-400/50",
+            (suspect || mismatch) && "border-current/35",
           )}
           value={label}
           aria-label={`Column name ${index + 1}`}
-          aria-describedby={suspect ? `suspect-${index}` : undefined}
+          aria-describedby={note ? `suspect-${index}` : undefined}
           onChange={(event) => rename(index, event.target.value)}
         />
         <button
@@ -106,10 +135,11 @@ function ColumnHeader({ index }: { index: number }) {
           title={lastColumn ? "Keep at least one column" : `Remove ${label}`}
           disabled={lastColumn}
           className={cn(
-            "inline-flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground outline-none",
-            "opacity-0 hover:bg-muted hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring",
-            "group-hover/header:opacity-100 pointer-coarse:opacity-70",
-            suspect && !lastColumn && "opacity-100",
+            "inline-flex size-8 shrink-0 items-center justify-center rounded-sm text-muted-foreground outline-none",
+            "opacity-50 hover:bg-muted hover:text-foreground hover:opacity-100",
+            "focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring",
+            "group-hover/header:opacity-100 pointer-coarse:size-11 pointer-coarse:opacity-80",
+            (suspect || mismatch) && !lastColumn && "opacity-100",
             lastColumn && "opacity-40",
           )}
           onClick={() => remove(index)}
@@ -117,16 +147,10 @@ function ColumnHeader({ index }: { index: number }) {
           <X className="size-3" />
         </button>
       </div>
-      {suspect && (
-        <button
-          type="button"
-          id={`suspect-${index}`}
-          disabled={lastColumn}
-          className="w-fit text-left text-[11px] leading-tight text-amber-800 underline-offset-2 hover:underline disabled:no-underline disabled:opacity-60 dark:text-amber-400/90"
-          onClick={() => remove(index)}
-        >
-          {lastColumn ? `${suspect.reason} · keep one` : `${suspect.reason} — drop`}
-        </button>
+      {note && (
+        <p id={`suspect-${index}`} className="ledger-suspect">
+          {note}
+        </p>
       )}
     </div>
   );
@@ -140,9 +164,11 @@ function RowDropButton({ row, rowIndex }: { row: ReviewRow; rowIndex: number }) 
       aria-label={`Drop row ${rowIndex + 1}`}
       title="Drop this row"
       className={cn(
-        "inline-flex size-6 items-center justify-center rounded-sm text-muted-foreground outline-none",
-        "opacity-0 hover:bg-muted hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring",
-        "group-hover/row:opacity-100 pointer-coarse:opacity-70",
+        "inline-flex size-8 items-center justify-center rounded-sm text-muted-foreground outline-none",
+        "opacity-50 hover:bg-muted hover:text-foreground hover:opacity-100",
+        "focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring",
+        "group-hover/row:opacity-100 group-focus-within/row:opacity-100",
+        "pointer-coarse:size-11 pointer-coarse:opacity-80",
       )}
       onClick={() => dropRow(row.id)}
     >
@@ -194,6 +220,7 @@ interface ReviewStepProps {
   tables: ExtractedTable[];
   fileName: string;
   loading?: boolean;
+  extractProgress?: ExtractProgress | null;
   error?: string;
   canExtract: boolean;
   templateName?: string;
@@ -207,10 +234,93 @@ interface ReviewStepProps {
   onRememberLayout?: (payload: { name: string; columns: string[] }) => void;
 }
 
+function LedgerWait({
+  boxCount,
+  progress,
+}: {
+  boxCount: number;
+  progress: ExtractProgress | null;
+}) {
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    const started = Date.now();
+    const id = window.setInterval(() => setElapsed(Date.now() - started), 1000);
+    return () => window.clearInterval(id);
+  }, []);
+  const ratio = readingRatio(progress);
+  const elapsedLabel = formatElapsed(elapsed);
+  const columns = [
+    { key: "page", className: "ledger-page", align: "left" as const, header: 0.55, pattern: [0.4, 0.38, 0.42, 0.36] },
+    { key: "date", className: "ledger-date", align: "left" as const, header: 0.62, pattern: [0.7, 0.66, 0.72, 0.64] },
+    { key: "details", className: "ledger-grow", align: "left" as const, header: 0.28, pattern: [0.82, 0.58, 0.74, 0.9, 0.46, 0.68] },
+    { key: "in", className: "ledger-money", align: "right" as const, header: 0.5, pattern: [0.48, 0.22, 0.4, 0.18] },
+    { key: "out", className: "ledger-money", align: "right" as const, header: 0.58, pattern: [0.36, 0.5, 0.28, 0.46] },
+  ];
+  const rowCount = 16;
+
+  return (
+    <div className="ledger-sheet ledger-wait" role="status" aria-live="polite">
+      <div className="ledger-wait-meta">
+        <div className="ledger-wait-copy">
+          <strong>{readingHeadline(boxCount)}</strong>
+          <p>{readingDetail(progress, boxCount)}</p>
+          <p>{readingHint(boxCount)}</p>
+        </div>
+        {elapsedLabel ? <p className="ledger-wait-elapsed">{elapsedLabel}</p> : null}
+      </div>
+      <div
+        className="ledger-wait-rule"
+        data-indeterminate={ratio == null ? "true" : undefined}
+        aria-hidden
+      >
+        <span style={ratio == null ? undefined : { width: `${Math.round(ratio * 100)}%` }} />
+      </div>
+      <div className="ledger-scroll" aria-hidden>
+        <Table className="ledger ledger-wait-ink w-max min-w-full" containerClassName="overflow-visible w-max min-w-full">
+          <TableHeader>
+            <TableRow className="border-0 hover:bg-transparent">
+              {columns.map((column) => (
+                <TableHead
+                  key={column.key}
+                  className={cn("h-auto py-2 align-bottom", column.className, column.align === "right" && "text-right")}
+                >
+                  <span className="ledger-ghost" style={{ width: `${column.header * 100}%`, marginLeft: column.align === "right" ? "auto" : undefined }} />
+                </TableHead>
+              ))}
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {Array.from({ length: rowCount }, (_, row) => (
+              <TableRow key={row} data-alt={row % 2 === 1 ? "true" : undefined} className="border-0 hover:bg-transparent">
+                {columns.map((column) => (
+                  <TableCell
+                    key={column.key}
+                    className={cn("py-2.5", column.className, column.align === "right" && "text-right")}
+                  >
+                    <span
+                      className="ledger-ghost"
+                      style={{
+                        width: `${column.pattern[row % column.pattern.length] * 100}%`,
+                        marginLeft: column.align === "right" ? "auto" : undefined,
+                        animationDelay: `${row * 80}ms`,
+                      }}
+                    />
+                  </TableCell>
+                ))}
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+    </div>
+  );
+}
+
 export function ReviewStep({
   tables,
   fileName,
   loading,
+  extractProgress = null,
   error,
   canExtract,
   templateName,
@@ -232,7 +342,10 @@ export function ReviewStep({
   const [saveError, setSaveError] = useState("");
   const [layoutName, setLayoutName] = useState(suggestedLayoutName);
   const [rememberDismissed, setRememberDismissed] = useState(false);
+  const [gridChecked, setGridChecked] = useState(false);
   const findRef = useRef<HTMLInputElement>(null);
+  const ledgerRef = useRef<HTMLDivElement>(null);
+  const [windowView, setWindowView] = useState({ top: 0, height: 480 });
 
   useEffect(() => {
     setLayoutName(suggestedLayoutName);
@@ -249,6 +362,7 @@ export function ReviewStep({
     setRemovedRows(new Set());
     setEdits({});
     setQuery("");
+    setGridChecked(false);
     // Reset when the extracted header set changes, not on array identity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sourceKey]);
@@ -273,6 +387,7 @@ export function ReviewStep({
     [original, names, edits, removed, removedRows],
   );
   const suspects = useMemo(() => columnSuspects(names, visibleRows), [names, visibleRows]);
+  const shift = useMemo(() => columnShift(names, visibleRows), [names, visibleRows]);
   const dropped = useMemo(
     () => [...removed].sort((a, b) => a - b),
     [removed],
@@ -283,6 +398,27 @@ export function ReviewStep({
   );
   const hasRows = visibleRows.length > 0;
   const hasListed = listedRows.length > 0;
+
+  const syncLedgerWindow = useCallback(() => {
+    const el = ledgerRef.current;
+    if (!el) return;
+    setWindowView({ top: el.scrollTop, height: el.clientHeight });
+  }, []);
+
+  useEffect(() => {
+    if (!hasListed) return;
+    const el = ledgerRef.current;
+    if (!el) return;
+    syncLedgerWindow();
+    const observer = new ResizeObserver(() => syncLedgerWindow());
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [hasListed, listedRows.length, syncLedgerWindow]);
+
+  const windowed = useMemo(
+    () => windowedRange(listedRows.length, windowView.top, windowView.height),
+    [listedRows.length, windowView.top, windowView.height],
+  );
 
   useEffect(() => {
     if (!hasRows) return;
@@ -412,30 +548,33 @@ export function ReviewStep({
     }
   };
 
-  const boxSummary = `${boxCount || tables.length} box${
-    (boxCount || tables.length) === 1 ? "" : "es"
-  }${templateName ? ` · ${templateName}` : ""}`;
+  const pageSummary = `${new Set(visibleRows.map((row) => row.page)).size} page${
+    new Set(visibleRows.map((row) => row.page)).size === 1 ? "" : "s"
+  }`;
+  const boxSummary = loading
+    ? `${boxCount || tables.length} table${(boxCount || tables.length) === 1 ? "" : "s"}`
+    : hasRows
+      ? pageSummary
+      : `${boxCount || tables.length} table${(boxCount || tables.length) === 1 ? "" : "s"}`;
+  const fileSummary = `${boxSummary}${templateName ? ` · ${templateName}` : ""}`;
   const rowCount = finding
     ? `${listedRows.length} of ${visibleRows.length} rows`
     : `${visibleRows.length} rows`;
   const status = loading
-    ? `Reading ${boxSummary}…`
+    ? `Reading ${fileSummary}…`
     : hasRows
-      ? `${rowCount} · ${boxSummary}${
+      ? `${rowCount} · ${fileSummary}${
           corrections.length ? ` · ${corrections.length} corrected` : ""
         }${removedRows.size ? ` · ${removedRows.size} dropped` : ""}`
-      : `No rows · ${boxSummary}`;
-  const exportHint = hasRows
-    ? undefined
-    : loading
+      : `No rows · ${fileSummary}`;
+  const exportReady = hasRows && (!shift.shifted || gridChecked);
+  const exportHint = !hasRows
+    ? loading
       ? "Wait for rows before export."
-      : "Adjust the boxes, then export.";
-  const showHelper =
-    hasRows &&
-    !finding &&
-    dropped.length === 0 &&
-    droppedRowItems.length === 0 &&
-    suspects.length === 0;
+      : "Adjust the boxes, then export."
+    : exportReady
+      ? undefined
+      : "These headers don’t match the cells yet. Check the grid, then export.";
   const showRemember = Boolean(canRemember && onRememberLayout && hasRows && !rememberDismissed);
 
   const editValue: ReviewEditContextValue = {
@@ -445,6 +584,7 @@ export function ReviewStep({
     original,
     visibleCount: visible.length,
     suspects,
+    mismatches: shift.mismatches,
     rename,
     remove,
     dropRow,
@@ -453,7 +593,7 @@ export function ReviewStep({
 
   return (
     <ReviewEditContext.Provider value={editValue}>
-      <main className="flex min-h-0 flex-1 flex-col bg-background">
+      <main className="flex min-h-0 flex-1 flex-col bg-background" aria-busy={loading || undefined}>
         <div className="flex shrink-0 flex-nowrap items-center gap-3 overflow-x-auto bg-background px-3 py-1.5">
           <h1 ref={headingRef} tabIndex={-1} className="text-sm font-semibold outline-none">
             Review
@@ -507,15 +647,17 @@ export function ReviewStep({
               aria-describedby={exportHint ? "export-hint" : undefined}
               onClick={() => void save("csv")}
             >
-              Export CSV
+              {saving ? "Exporting…" : "Export CSV"}
             </Button>
             <Button
+              variant={exportReady ? undefined : "outline"}
               size="xs"
               disabled={!hasRows || saving}
               aria-describedby={exportHint ? "export-hint" : undefined}
+              title={!exportReady && hasRows ? exportHint : undefined}
               onClick={() => void save("xlsx")}
             >
-              Export Excel
+              {saving ? "Exporting…" : "Export Excel"}
             </Button>
           </div>
         </div>
@@ -583,7 +725,6 @@ export function ReviewStep({
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           <div aria-live="polite" className="shrink-0 px-4 pt-3 empty:hidden">
             {error && <p className="mb-2 text-sm text-destructive">{error}</p>}
-            {loading && <p className="text-sm text-muted-foreground">Reading the selected tables…</p>}
             {!loading && !canExtract && (
               <p className="text-sm text-muted-foreground">
                 Extraction runs in the desktop app. Boxes are saved — open this window from PesaView
@@ -599,11 +740,23 @@ export function ReviewStep({
             )}
             {saveError && <p className="mb-2 text-sm text-destructive">{saveError}</p>}
           </div>
+          {loading && !hasRows && <LedgerWait boxCount={boxCount || tables.length} progress={extractProgress} />}
           {hasRows && (
             <div className="ledger-sheet">
-              {showHelper && (
+              {shift.shifted && !gridChecked && (
+                <div className="ledger-banner">
+                  <p>
+                    These headers don’t match the cells. Rename a header so it describes the
+                    column, or go back and adjust the boxes.
+                  </p>
+                  <Button size="xs" variant="ghost" onClick={() => setGridChecked(true)}>
+                    I’ll check the grid
+                  </Button>
+                </div>
+              )}
+              {hasRows && (!shift.shifted || gridChecked) && !finding && (
                 <p className="ledger-caption">
-                  Rename a header. Hover a row to drop it. Amber is yours.
+                  Edited cells are marked in amber. × drops a row or column.
                 </p>
               )}
               {finding && !hasListed && (
@@ -622,7 +775,12 @@ export function ReviewStep({
                 </p>
               )}
               {hasListed && (
-              <div className="ledger-scroll" id="review-ledger">
+              <div
+                className="ledger-scroll"
+                id="review-ledger"
+                ref={ledgerRef}
+                onScroll={syncLedgerWindow}
+              >
                 <Table className="ledger w-max min-w-full" containerClassName="overflow-visible w-max min-w-full">
                   <TableHeader>
                     {table.getHeaderGroups().map((group) => (
@@ -650,8 +808,21 @@ export function ReviewStep({
                     ))}
                   </TableHeader>
                   <TableBody>
-                    {table.getRowModel().rows.map((row) => (
-                      <TableRow key={row.id} className="group/row border-0 hover:bg-transparent">
+                    {windowed.padTop > 0 && (
+                      <TableRow aria-hidden className="border-0 hover:bg-transparent">
+                        <TableCell
+                          colSpan={2 + visible.length}
+                          className="p-0"
+                          style={{ height: windowed.padTop, border: 0 }}
+                        />
+                      </TableRow>
+                    )}
+                    {table.getRowModel().rows.slice(windowed.start, windowed.end).map((row) => (
+                      <TableRow
+                        key={row.id}
+                        data-alt={row.index % 2 === 1 ? "true" : undefined}
+                        className="group/row border-0 hover:bg-transparent"
+                      >
                         {row.getAllCells().map((cell) => {
                           const role = headerRole(cell.column.id, names);
                           const grow = cell.column.id === growHeaderId;
@@ -673,6 +844,15 @@ export function ReviewStep({
                         })}
                       </TableRow>
                     ))}
+                    {windowed.padBottom > 0 && (
+                      <TableRow aria-hidden className="border-0 hover:bg-transparent">
+                        <TableCell
+                          colSpan={2 + visible.length}
+                          className="p-0"
+                          style={{ height: windowed.padBottom, border: 0 }}
+                        />
+                      </TableRow>
+                    )}
                   </TableBody>
                 </Table>
               </div>

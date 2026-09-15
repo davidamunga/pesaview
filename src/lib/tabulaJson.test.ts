@@ -144,6 +144,205 @@ describe("tablesFromTabulaJson", () => {
     ).toEqual(["01-08-2026", "VISA-GOOGLE", "499.00", "", "204,230.21 Cr"]);
   });
 
+  it("keeps M-PESA receipt, time, details, and status in separate columns", () => {
+    const raw = JSON.stringify([
+      {
+        page: 1,
+        data: [
+          [
+            { text: "Receipt No.", left: 50.9, width: 41 },
+            { text: "Completion Time", left: 111.8, width: 58.5 },
+            { text: "Details", left: 216.6, width: 23.2 },
+            { text: "Transaction Status", left: 284.6, width: 61.6 },
+            { text: "Paid In", left: 373.2, width: 23.9 },
+            { text: "Withdrawn", left: 436.1, width: 37.5 },
+            { text: "Balance", left: 510.0, width: 28.3 },
+          ],
+          [
+            { text: "UGLL809YEK", left: 39.0, width: 41.8 },
+            { text: "2026-07-21", left: 108.7, width: 36.6 },
+            { text: "Merchant Payment Fuliza M-", left: 178.5, width: 97.4 },
+            { text: "Completed", left: 283.1, width: 40.2 },
+            { text: "0.00", left: 403.0, width: 14.5 },
+            { text: "40.00", left: 468.8, width: 18.4 },
+            { text: "0.00", left: 542.4, width: 13.6 },
+          ],
+          [
+            { text: "15:41:59", left: 108.7, width: 28.1 },
+            { text: "Pesa to 3545217 - Trans Trum", left: 178.5, width: 95.0 },
+          ],
+          [{ text: "L475", left: 178.5, width: 14.9 }],
+        ],
+      },
+    ]);
+    const tables = tablesFromTabulaJson(raw, {
+      columns: [
+        "Receipt No.",
+        "Completion Time",
+        "Details",
+        "Transaction Status",
+        "Paid In",
+        "Withdrawn",
+        "Balance",
+      ],
+    });
+    expect(tables[0].rows).toHaveLength(1);
+    expect(tables[0].rows[0]).toEqual([
+      "UGLL809YEK",
+      "2026-07-21 15:41:59",
+      "Merchant Payment Fuliza M- Pesa to 3545217 - Trans Trum L475",
+      "Completed",
+      "0.00",
+      "40.00",
+      "0.00",
+    ]);
+  });
+
+  it("folds a wrapped time onto the previous page’s last receipt", () => {
+    const raw = JSON.stringify([
+      {
+        page: 1,
+        data: [
+          [
+            { text: "Receipt No.", left: 50.9, width: 41 },
+            { text: "Completion Time", left: 111.8, width: 58.5 },
+            { text: "Details", left: 216.6, width: 23.2 },
+            { text: "Transaction Status", left: 284.6, width: 61.6 },
+            { text: "Paid In", left: 373.2, width: 23.9 },
+            { text: "Withdrawn", left: 436.1, width: 37.5 },
+            { text: "Balance", left: 510.0, width: 28.3 },
+          ],
+          [
+            { text: "UGLL808J0X", left: 39.0, width: 41.2 },
+            { text: "2026-07-21", left: 108.7, width: 36.6 },
+            { text: "Customer Send Money to", left: 178.5, width: 87.2 },
+            { text: "Completed", left: 283.1, width: 40.2 },
+            { text: "0.00", left: 403.0, width: 14.5 },
+            { text: "50.00", left: 468.8, width: 18.4 },
+            { text: "0.00", left: 542.4, width: 13.6 },
+          ],
+        ],
+      },
+      {
+        page: 2,
+        data: [
+          [
+            { text: "09:33:35", left: 108.7, width: 28.1 },
+            { text: "Micro SME Business  with", left: 178.5, width: 80.9 },
+          ],
+          [
+            { text: "UGLL808F3A", left: 39.0, width: 41.8 },
+            { text: "2026-07-21", left: 108.7, width: 36.6 },
+            { text: "Customer Send Money to Micro", left: 178.5, width: 97.4 },
+            { text: "Completed", left: 283.1, width: 40.2 },
+            { text: "0.00", left: 403.0, width: 14.5 },
+            { text: "20.00", left: 468.8, width: 18.4 },
+            { text: "0.00", left: 542.4, width: 13.6 },
+          ],
+          [{ text: "08:31:02", left: 108.7, width: 28.1 }],
+        ],
+      },
+    ]);
+    const tables = tablesFromTabulaJson(raw);
+    expect(tables[0].rows[0]).toEqual([
+      "UGLL808J0X",
+      "2026-07-21 09:33:35",
+      "Customer Send Money to Micro SME Business with",
+      "Completed",
+      "0.00",
+      "50.00",
+      "0.00",
+    ]);
+    expect(tables[1].rows[0][0]).toBe("UGLL808F3A");
+    expect(tables[1].rows[0][1]).toBe("2026-07-21 08:31:02");
+  });
+
+  it("keeps the first receipt on a continuation page instead of treating it as a header", () => {
+    const raw = JSON.stringify([
+      {
+        page: 1,
+        data: [
+          [
+            { text: "Receipt No.", left: 50.9, width: 41 },
+            { text: "Completion Time", left: 111.8, width: 58.5 },
+            { text: "Details", left: 216.6, width: 23.2 },
+            { text: "Transaction Status", left: 284.6, width: 61.6 },
+            { text: "Paid In", left: 373.2, width: 23.9 },
+            { text: "Withdrawn", left: 436.1, width: 37.5 },
+            { text: "Balance", left: 510.0, width: 28.3 },
+          ],
+          [
+            { text: "UGLL809YEK", left: 39.0, width: 41.8 },
+            { text: "2026-07-21", left: 108.7, width: 36.6 },
+            { text: "Merchant Payment", left: 178.5, width: 97.4 },
+            { text: "Completed", left: 283.1, width: 40.2 },
+            { text: "0.00", left: 403.0, width: 14.5 },
+            { text: "40.00", left: 468.8, width: 18.4 },
+            { text: "0.00", left: 542.4, width: 13.6 },
+          ],
+          [{ text: "15:41:59", left: 108.7, width: 28.1 }],
+        ],
+      },
+      {
+        page: 2,
+        data: [
+          [
+            { text: "UGKL806JER", left: 39.0, width: 41.2 },
+            { text: "2026-07-20", left: 108.7, width: 36.6 },
+            { text: "Customer Send Money to", left: 178.5, width: 87.2 },
+            { text: "Completed", left: 283.1, width: 40.2 },
+            { text: "0.00", left: 403.0, width: 14.5 },
+            { text: "50.00", left: 468.8, width: 18.4 },
+            { text: "0.00", left: 542.4, width: 13.6 },
+          ],
+          [
+            { text: "18:00:03", left: 108.7, width: 28.1 },
+            { text: "Micro SME Business with Fuliza", left: 178.5, width: 80.9 },
+          ],
+        ],
+      },
+    ]);
+    const tables = tablesFromTabulaJson(raw);
+    expect(tables[0].rows[0][1]).toBe("2026-07-21 15:41:59");
+    expect(tables[1].rows[0][0]).toBe("UGKL806JER");
+    expect(tables[1].rows[0][1]).toBe("2026-07-20 18:00:03");
+    expect(tables[1].rows[0][2]).toContain("Micro SME Business");
+  });
+
+  it("folds a details wrap that mentions a fee amount into the previous receipt", () => {
+    const raw = JSON.stringify([
+      {
+        page: 1,
+        data: [
+          [
+            { text: "Receipt No.", left: 50.9, width: 41 },
+            { text: "Completion Time", left: 111.8, width: 58.5 },
+            { text: "Details", left: 216.6, width: 23.2 },
+            { text: "Transaction Status", left: 284.6, width: 61.6 },
+            { text: "Paid In", left: 373.2, width: 23.9 },
+            { text: "Withdrawn", left: 436.1, width: 37.5 },
+            { text: "Balance", left: 510.0, width: 28.3 },
+          ],
+          [
+            { text: "QWERTY1234", left: 39.0, width: 41 },
+            { text: "2020-01-01", left: 108.7, width: 36.6 },
+            { text: "Send Money", left: 178.5, width: 80 },
+            { text: "Completed", left: 283.1, width: 40.2 },
+            { text: "0.00", left: 403.0, width: 14.5 },
+            { text: "10.00", left: 468.8, width: 18.4 },
+            { text: "5.00", left: 542.4, width: 13.6 },
+          ],
+          [{ text: "12:00:00", left: 108.7, width: 28 }],
+          [{ text: "254*****2000 incl of Ksh 1.00 Processing fee", left: 178.5, width: 120 }],
+        ],
+      },
+    ]);
+    const tables = tablesFromTabulaJson(raw);
+    expect(tables[0].rows).toHaveLength(1);
+    expect(tables[0].rows[0][2]).toContain("Processing fee");
+    expect(tables[0].rows[0][1]).toBe("2020-01-01 12:00:00");
+  });
+
   it("keeps right-aligned amounts in the header column they sit under", () => {
     const edges = [32, 236, 559, 692, 837];
     expect(

@@ -188,6 +188,31 @@ body {
   color: color-mix(in oklch, var(--ledger-ink) 58%, var(--ledger-paper));
 }
 
+.ledger-banner {
+  display: flex;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  padding: 0.65rem 0.85rem 0.35rem;
+}
+
+.ledger-banner p {
+  margin: 0;
+  max-width: 42rem;
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  color: var(--ledger-ink);
+}
+
+.ledger-suspect {
+  margin: 0;
+  font-size: 0.6875rem;
+  line-height: 1.3;
+  color: color-mix(in oklch, var(--ledger-ink) 58%, var(--ledger-paper));
+}
+
 .ledger-scroll {
   min-width: 0;
   min-height: 0;
@@ -225,7 +250,7 @@ body {
   position: sticky;
   top: 0;
   z-index: 2;
-  background: var(--ledger-paper);
+  background-color: var(--background);
   color: var(--ledger-ink);
   border-bottom: 1px solid color-mix(in oklch, var(--primary) 28%, var(--ledger-ink));
 }
@@ -236,7 +261,7 @@ body {
   vertical-align: top;
 }
 
-.ledger tbody tr:nth-child(even) td {
+.ledger tbody tr[data-alt="true"] td {
   background: var(--ledger-row);
 }
 
@@ -248,17 +273,18 @@ body {
   position: sticky;
   left: 0;
   z-index: 1;
-  width: 2.25rem;
-  min-width: 2.25rem;
+  width: 2.75rem;
+  min-width: 2.75rem;
 }
 
 .ledger thead th.ledger-drop {
   z-index: 3;
+  background-color: var(--background);
 }
 
 .ledger-page {
   position: sticky;
-  left: 2.25rem;
+  left: 2.75rem;
   z-index: 1;
   width: 3.5rem;
   min-width: 3.5rem;
@@ -267,6 +293,7 @@ body {
 
 .ledger thead th.ledger-page {
   z-index: 3;
+  background-color: var(--background);
 }
 
 .ledger-date {
@@ -285,19 +312,19 @@ body {
 .ledger-folio {
   display: block;
   padding-top: 0.4rem;
-  font-size: 0.6875rem;
+  font-size: 0.8125rem;
   letter-spacing: 0.04em;
-  color: color-mix(in oklch, var(--ledger-ink) 52%, var(--ledger-paper));
+  color: color-mix(in oklch, var(--ledger-ink) 78%, var(--ledger-paper));
 }
 
 .ledger-folio-label {
   display: block;
   padding-bottom: 0.35rem;
-  font-size: 0.625rem;
+  font-size: 0.6875rem;
   font-weight: 600;
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: color-mix(in oklch, var(--ledger-ink) 55%, var(--ledger-paper));
+  color: color-mix(in oklch, var(--ledger-ink) 70%, var(--ledger-paper));
 }
 
 .ledger-title {
@@ -324,4 +351,108 @@ body {
 
 .ledger-amount {
   font-variant-numeric: tabular-nums lining-nums;
+}
+
+.ledger-wait {
+  min-height: 0;
+}
+
+.ledger-wait-meta {
+  display: flex;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.45rem 1.25rem;
+  padding: 0.7rem 0.85rem 0.35rem;
+}
+
+.ledger-wait-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.ledger-wait-copy strong {
+  font-size: 0.875rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--ledger-ink);
+}
+
+.ledger-wait-copy p,
+.ledger-wait-elapsed {
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: color-mix(in oklch, var(--ledger-ink) 58%, var(--ledger-paper));
+}
+
+.ledger-wait-elapsed {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.ledger-wait-rule {
+  flex-shrink: 0;
+  height: 2px;
+  margin: 0.35rem 0.85rem 0.15rem;
+  overflow: hidden;
+  background: color-mix(in oklch, var(--ledger-ink) 10%, var(--ledger-paper));
+}
+
+.ledger-wait-rule > span {
+  display: block;
+  height: 100%;
+  width: 28%;
+  background: color-mix(in oklch, var(--primary) 70%, var(--ledger-ink));
+  transition: width 0.45s ease;
+}
+
+.ledger-wait-rule[data-indeterminate] > span {
+  animation: ledger-wait-sweep 1.65s ease-in-out infinite;
+}
+
+@keyframes ledger-wait-sweep {
+  0% {
+    transform: translateX(-130%);
+  }
+  100% {
+    transform: translateX(430%);
+  }
+}
+
+.ledger-ghost {
+  display: block;
+  height: 0.55rem;
+  max-width: 100%;
+  border-radius: 1px;
+  background: color-mix(in oklch, var(--ledger-ink) 13%, var(--ledger-paper));
+}
+
+.ledger thead th .ledger-ghost {
+  height: 0.45rem;
+  background: color-mix(in oklch, var(--ledger-ink) 22%, var(--ledger-paper));
+}
+
+.ledger-wait-ink tbody td .ledger-ghost {
+  animation: ledger-wait-ink 2.5s ease-in-out infinite;
+}
+
+@keyframes ledger-wait-ink {
+  0%,
+  100% {
+    opacity: 0.42;
+  }
+  50% {
+    opacity: 0.9;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ledger-wait-rule[data-indeterminate] > span,
+  .ledger-wait-ink tbody td .ledger-ghost {
+    animation: none;
+  }
 }

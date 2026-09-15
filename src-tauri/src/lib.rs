@@ -3,14 +3,18 @@ mod tabula;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
-use tauri::Manager;
-use tauri::State;
+use serde::Serialize;
+use tauri::{Emitter, Manager, State};
 
-use crate::tabula::{group_areas, method_flag, parse_page_spec, TableArea};
+use crate::tabula::{
+    assign_missing_pages, format_page_spec, group_areas, method_flag, parse_page_spec, TableArea,
+    PAGES_PER_TABULA_RUN,
+};
 
-pub struct ActivePid(pub Mutex<Option<u32>>);
+#[derive(Clone)]
+pub struct ActivePid(pub Arc<Mutex<Option<u32>>>);
 
 #[cfg(target_os = "windows")]
 fn normalize_windows_path(path: PathBuf) -> PathBuf {
@@ -99,10 +103,7 @@ fn resolve_java(
         {
             let mut command = command;
             command.creation_flags(0x08000000);
-            (
-                command,
-                format!("bundled JRE at {:?}", java_binary),
-            )
+            (command, format!("bundled JRE at {:?}", java_binary))
         }
         #[cfg(not(target_os = "windows"))]
         {
@@ -127,7 +128,7 @@ fn resolve_java(
 
 fn run_tabula(
     app_handle: &tauri::AppHandle,
-    active_pid: &State<'_, ActivePid>,
+    active_pid: &ActivePid,
     pdf_path: &str,
     password: Option<&str>,
     extra_args: &[&str],
@@ -198,9 +199,7 @@ fn cancel_extraction(active_pid: State<'_, ActivePid>) {
     if let Some(pid) = pid {
         #[cfg(unix)]
         {
-            let _ = Command::new("kill")
-                .args(["-9", &pid.to_string()])
-                .output();
+            let _ = Command::new("kill").args(["-9", &pid.to_string()]).output();
         }
         #[cfg(windows)]
         {
@@ -211,93 +210,113 @@ fn cancel_extraction(active_pid: State<'_, ActivePid>) {
     }
 }
 
-#[tauri::command]
-async fn extract_tables(
-    app_handle: tauri::AppHandle,
-    active_pid: State<'_, ActivePid>,
-    pdf_path: String,
-    password: Option<String>,
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExtractProgress {
+    done: u32,
+    total: u32,
+    page_from: u32,
+    page_to: u32,
+}
+
+fn emit_extract_progress(app_handle: &tauri::AppHandle, done: usize, total: usize, pages: &[u32]) {
+    let page_from = pages.first().copied().unwrap_or(1);
+    let page_to = pages.last().copied().unwrap_or(page_from);
+    let _ = app_handle.emit(
+        "extract-progress",
+        ExtractProgress {
+            done: done as u32,
+            total: total.max(1) as u32,
+            page_from,
+            page_to,
+        },
+    );
+}
+
+fn extract_tables_sync(
+    app_handle: &tauri::AppHandle,
+    active_pid: &ActivePid,
+    pdf_path: &str,
+    password: Option<&str>,
     areas: Vec<TableArea>,
 ) -> Result<String, String> {
     if areas.is_empty() {
+        emit_extract_progress(app_handle, 0, 1, &[1]);
         return run_tabula(
-            &app_handle,
-            &active_pid,
-            &pdf_path,
-            password.as_deref(),
+            app_handle,
+            active_pid,
+            pdf_path,
+            password,
             &["-f", "JSON", "-p", "all", "-g", "--silent"],
         );
     }
 
     let groups = group_areas(&areas);
+    let total: usize = groups
+        .iter()
+        .map(|group| group.pages.chunks(PAGES_PER_TABULA_RUN).len())
+        .sum::<usize>()
+        .max(1);
     let mut combined: Vec<serde_json::Value> = Vec::new();
+    let mut index = 0;
 
-    for (page, method, group) in groups {
-        let page_arg = page.to_string();
-        let mut extra: Vec<String> = vec![
-            "-f".into(),
-            "JSON".into(),
-            "-p".into(),
-            page_arg,
-            "--silent".into(),
-        ];
-        if let Some(flag) = method_flag(&method) {
-            extra.push(flag.into());
-        }
-        for area in &group {
-            extra.push("-a".into());
-            extra.push(area.area_arg());
-        }
-
-        let extra_refs: Vec<&str> = extra.iter().map(String::as_str).collect();
-        let stdout = run_tabula(
-            &app_handle,
-            &active_pid,
-            &pdf_path,
-            password.as_deref(),
-            &extra_refs,
-        )?;
-
-        if let Ok(mut tables) = serde_json::from_str::<Vec<serde_json::Value>>(
-            stdout
-                .find('[')
-                .and_then(|start| stdout.rfind(']').map(|end| &stdout[start..=end]))
-                .unwrap_or("[]"),
-        ) {
-            for table in &mut tables {
-                if table.get("page").is_none() {
-                    table
-                        .as_object_mut()
-                        .map(|obj| obj.insert("page".into(), serde_json::json!(page)));
-                }
+    for group in groups {
+        for chunk in group.pages.chunks(PAGES_PER_TABULA_RUN) {
+            emit_extract_progress(app_handle, index, total, chunk);
+            index += 1;
+            let page_arg = format_page_spec(chunk);
+            let mut extra: Vec<String> = vec![
+                "-f".into(),
+                "JSON".into(),
+                "-p".into(),
+                page_arg,
+                "--silent".into(),
+            ];
+            if let Some(flag) = method_flag(&group.method) {
+                extra.push(flag.into());
             }
-            combined.append(&mut tables);
+            for area in &group.areas {
+                extra.push("-a".into());
+                extra.push(area.area_arg());
+            }
+
+            let extra_refs: Vec<&str> = extra.iter().map(String::as_str).collect();
+            let stdout = run_tabula(app_handle, active_pid, pdf_path, password, &extra_refs)?;
+
+            if let Ok(mut tables) = serde_json::from_str::<Vec<serde_json::Value>>(
+                stdout
+                    .find('[')
+                    .and_then(|start| stdout.rfind(']').map(|end| &stdout[start..=end]))
+                    .unwrap_or("[]"),
+            ) {
+                assign_missing_pages(&mut tables, chunk, group.areas.len());
+                combined.append(&mut tables);
+            }
         }
     }
 
     Ok(serde_json::to_string(&combined).unwrap_or_else(|_| "[]".into()))
 }
 
-#[tauri::command]
-async fn guess_tables(
-    app_handle: tauri::AppHandle,
-    active_pid: State<'_, ActivePid>,
-    pdf_path: String,
-    password: Option<String>,
-    pages: Option<String>,
+fn guess_tables_sync(
+    app_handle: &tauri::AppHandle,
+    active_pid: &ActivePid,
+    pdf_path: &str,
+    password: Option<&str>,
+    pages: Option<&str>,
 ) -> Result<String, String> {
     // Stream one page at a time so we can stamp `page` (Tabula `-g`/`-t -p all`
     // often omits it) and avoid full-page lattice boxes that cover letterhead.
-    let page_list = parse_page_spec(&pages.unwrap_or_else(|| "all".into()));
+    let page_list = parse_page_spec(pages.unwrap_or("all"));
     let mut combined: Vec<serde_json::Value> = Vec::new();
 
     for page in page_list {
         let page_arg = page.to_string();
         let stdout = match run_tabula(
-            &app_handle,
-            &active_pid,
-            &pdf_path,
-            password.as_deref(),
+            app_handle,
+            active_pid,
+            pdf_path,
+            password,
             &["-f", "JSON", "-p", &page_arg, "-t", "--silent"],
         ) {
             Ok(value) => value,
@@ -324,6 +343,50 @@ async fn guess_tables(
     }
 
     Ok(serde_json::to_string(&combined).unwrap_or_else(|_| "[]".into()))
+}
+
+#[tauri::command]
+async fn extract_tables(
+    app_handle: tauri::AppHandle,
+    active_pid: State<'_, ActivePid>,
+    pdf_path: String,
+    password: Option<String>,
+    areas: Vec<TableArea>,
+) -> Result<String, String> {
+    let active_pid = active_pid.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        extract_tables_sync(
+            &app_handle,
+            &active_pid,
+            &pdf_path,
+            password.as_deref(),
+            areas,
+        )
+    })
+    .await
+    .map_err(|error| format!("Tabula task failed: {error}"))?
+}
+
+#[tauri::command]
+async fn guess_tables(
+    app_handle: tauri::AppHandle,
+    active_pid: State<'_, ActivePid>,
+    pdf_path: String,
+    password: Option<String>,
+    pages: Option<String>,
+) -> Result<String, String> {
+    let active_pid = active_pid.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        guess_tables_sync(
+            &app_handle,
+            &active_pid,
+            &pdf_path,
+            password.as_deref(),
+            pages.as_deref(),
+        )
+    })
+    .await
+    .map_err(|error| format!("Tabula task failed: {error}"))?
 }
 
 #[tauri::command]
@@ -364,6 +427,21 @@ async fn save_file(
 }
 
 #[tauri::command]
+fn path_exists(path: String) -> bool {
+    normalize_user_path(&path).exists()
+}
+
+#[tauri::command]
+fn write_file_at(path: String, content: Vec<u8>) -> Result<String, String> {
+    let path_buf = normalize_user_path(&path);
+    let mut file =
+        std::fs::File::create(&path_buf).map_err(|e| format!("Failed to create file: {e}"))?;
+    file.write_all(&content)
+        .map_err(|e| format!("Failed to write file: {e}"))?;
+    Ok(path_buf.display().to_string())
+}
+
+#[tauri::command]
 fn get_app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
@@ -380,7 +458,12 @@ fn parse_hex_rgb(hex: &str) -> Result<(u8, u8, u8), String> {
 }
 
 #[cfg(target_os = "macos")]
-fn set_macos_window_background(window: &tauri::WebviewWindow, r: u8, g: u8, b: u8) -> Result<(), String> {
+fn set_macos_window_background(
+    window: &tauri::WebviewWindow,
+    r: u8,
+    g: u8,
+    b: u8,
+) -> Result<(), String> {
     use objc2_app_kit::{NSColor, NSTitlebarSeparatorStyle, NSWindow};
 
     let ns_window_ptr = window.ns_window().map_err(|e| e.to_string())? as *mut NSWindow;
@@ -411,7 +494,7 @@ fn set_native_background(window: tauri::WebviewWindow, hex: String) -> Result<()
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .manage(ActivePid(Mutex::new(None)))
+        .manage(ActivePid(Arc::new(Mutex::new(None))))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
@@ -422,6 +505,8 @@ pub fn run() {
             guess_tables,
             cancel_extraction,
             save_file,
+            path_exists,
+            write_file_at,
             get_app_version,
             set_native_background
         ])

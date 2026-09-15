@@ -8,6 +8,19 @@ describe("templates", () => {
     expect(bundledTemplates().every((template) => template.source === "bundled")).toBe(true);
   });
 
+  it("keeps the M-PESA page-1 box below the summary and continuation boxes above the first receipt", () => {
+    const mpesa = bundledTemplates().find((template) => template.id === "mpesa");
+    const page1 = mpesa?.areas.find((area) => area.page === 1);
+    const rest = mpesa?.areas.find((area) => area.page === 0);
+    expect(page1?.top).toBeGreaterThanOrEqual(0.42);
+    expect(page1?.top).toBeLessThan(0.45);
+    expect(rest?.top).toBeGreaterThan(0.04);
+    expect(rest?.top).toBeLessThanOrEqual(0.07);
+    expect(mpesa?.skipRows).toEqual(
+      expect.arrayContaining(["Disclaimer", "Statement Verification"]),
+    );
+  });
+
   it("accepts a community JSON file without a bank kind", () => {
     const template = parseTemplate(
       {

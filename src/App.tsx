@@ -4,6 +4,7 @@ import { Document, PasswordResponses, pdfjs } from "react-pdf";
 import workerSrc from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { tempDir, join } from "@tauri-apps/api/path";
 import { writeFile } from "@tauri-apps/plugin-fs";
+import { BatchView } from "@/components/batch-view";
 import { FileOpener } from "@/components/file-opener";
 import { PageSidebar } from "@/components/page-sidebar";
 import { PasswordPrompt } from "@/components/password-prompt";
@@ -23,8 +24,11 @@ import {
 } from "@/components/ui/dialog";
 import { applyTemplateArea } from "@/lib/coordinates";
 import { matchTemplate } from "@/lib/matchTemplate";
-import { pickPdf } from "@/lib/pickPdf";
+import { jobsFromPicked, type BatchJob } from "@/lib/batchJob";
+import type { ExtractProgress } from "@/lib/extractWait";
+import { pickPdf, type PickedPdf } from "@/lib/pickPdf";
 import { pdfDocumentFile } from "@/lib/pdfSource";
+import { pdfPageMetrics } from "@/lib/pdfPageMetrics";
 import {
   canRedo,
   canUndo,
@@ -36,8 +40,10 @@ import {
   undoHistory,
 } from "@/lib/selectionHistory";
 import {
+  guessPageSpec,
   planAutodetect,
   rememberCopy,
+  repeatPageSelections,
   stampSelectionsToEmptyPages,
   suggestLayout,
 } from "@/lib/rememberLayout";
@@ -93,6 +99,7 @@ export default function App() {
   const [zoom, setZoom] = useState(1);
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const [pendingPdf, setPendingPdf] = useState<OpenedPdf | null>(null);
+  const [batchJobs, setBatchJobs] = useState<BatchJob[] | null>(null);
   const viewerRef = useRef<HTMLDivElement>(null);
   const zoomRef = useRef(1);
   const stepHeadingRef = useRef<HTMLHeadingElement>(null);
@@ -113,6 +120,7 @@ export default function App() {
   const areaKey = JSON.stringify(areas);
   const canSelect = Boolean(pdf);
   const canReview = areas.length > 0;
+  const inBatch = batchJobs !== null && !pdf;
   const canContinue = areas.length > 0 && !busy;
   const layoutSuggestion = useMemo(
     () => suggestLayout(detectSample, pdf?.name),
@@ -290,6 +298,21 @@ export default function App() {
     void openPdf(next);
   };
 
+  const startBatch = (picked: PickedPdf[]) => {
+    if (picked.length === 0) return;
+    setPendingPdf(null);
+    setPdf(null);
+    clearWorkspace();
+    setBatchJobs(jobsFromPicked(picked, createId));
+    setStep("upload");
+  };
+
+  const backToBatch = () => {
+    setPdf(null);
+    clearWorkspace();
+    setStep("upload");
+  };
+
   const changePdf = async () => {
     try {
       const next = await pickPdf();
@@ -355,8 +378,10 @@ export default function App() {
     Array.from({ length: pageCount }, (_, i) => i + 1).filter((page) => !excludedPages.has(page));
 
   const applyTemplate = (template: StatementTemplate) => {
-    const fallback = pageMetrics[currentPage];
+    const fallback =
+      pageMetrics[currentPage] ?? pageMetrics[1] ?? Object.values(pageMetrics)[0];
     if (!fallback) {
+      pendingApply.current = template;
       setStatus("Wait for the page to finish rendering, then apply the template again.");
       return;
     }
@@ -412,12 +437,30 @@ export default function App() {
     }
   };
 
+  const repeatCurrentPage = () => {
+    const fallback =
+      pageMetrics[currentPage] ?? pageMetrics[1] ?? Object.values(pageMetrics)[0];
+    const next = repeatPageSelections(
+      selections,
+      currentPage,
+      includedPages(),
+      pageMetrics,
+      fallback,
+    );
+    if (next === selections) {
+      setStatus("Draw or adjust the box on this page first.");
+      return;
+    }
+    replaceBoxes(next);
+    setStatus("Using this box on the other pages. Continue to check the rows.");
+  };
+
   const autodetect = async (password = pdf?.password) => {
     if (!workingPath || !isTauri()) return;
-    setBusy(true);
-    setStatus("Looking for transaction tables…");
+      setBusy(true);
+      setStatus("Looking at the first pages…");
     try {
-      const pages = pageCount > 0 ? includedPages().join(",") : "all";
+      const pages = guessPageSpec(includedPages());
       const { areas: foundAreas, raw } = await TabulaService.guessTables(workingPath, password, pages);
       const next = foundAreas
         .filter((area) => !excludedPages.has(area.page))
@@ -435,8 +478,11 @@ export default function App() {
           next,
           includedPages(),
           pageMetrics,
-          pageMetrics[currentPage],
+          pageMetrics[currentPage] ?? pageMetrics[1] ?? Object.values(pageMetrics)[0],
         );
+        if (stamped.length > next.length) {
+          replaceBoxes(next, false);
+        }
         replaceBoxes(stamped);
         setActiveTemplate(matched ?? null);
         setStatus(
@@ -447,7 +493,8 @@ export default function App() {
         return;
       }
       if (plan.kind === "apply-match") {
-        const fallback = pageMetrics[currentPage] ?? pageMetrics[1];
+        const fallback =
+          pageMetrics[currentPage] ?? pageMetrics[1] ?? Object.values(pageMetrics)[0];
         if (fallback) {
           applyTemplate(plan.template);
         } else {
@@ -490,6 +537,18 @@ export default function App() {
   }, [workingPath, pageCount]);
 
   useEffect(() => {
+    if (!pdf?.data || pageCount < 1) return;
+    let cancelled = false;
+    void pdfPageMetrics(pdf.data, pdf.password).then(({ metrics }) => {
+      if (cancelled) return;
+      setPageMetrics((current) => ({ ...metrics, ...current }));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [pdf?.data, pdf?.password, pageCount]);
+
+  useEffect(() => {
     if (!unlocking || pageCount < 1 || isTauri()) return;
     unlockingRef.current = false;
     setUnlocking(false);
@@ -499,7 +558,7 @@ export default function App() {
   useEffect(() => {
     const pending = pendingApply.current;
     if (!pending || pageCount < 1) return;
-    const fallback = pageMetrics[currentPage] ?? pageMetrics[1];
+    const fallback = pageMetrics[currentPage] ?? pageMetrics[1] ?? Object.values(pageMetrics)[0];
     if (!fallback) return;
     pendingApply.current = null;
     applyTemplate(pending);
@@ -507,6 +566,7 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pageMetrics, currentPage, pageCount]);
 
+  const [extractProgress, setExtractProgress] = useState<ExtractProgress | null>(null);
   const extractQuery = useQuery({
     queryKey: [
       "extract",
@@ -518,12 +578,20 @@ export default function App() {
       activeTemplate?.columns,
       activeTemplate?.mergeRows,
     ],
-    queryFn: () =>
-      TabulaService.extractTables(workingPath!, areas, pdf?.password, {
-        skipRows: activeTemplate?.skipRows,
-        columns: activeTemplate?.columns,
-        mergeRows: activeTemplate?.mergeRows,
-      }),
+    queryFn: () => {
+      setExtractProgress(null);
+      return TabulaService.extractTables(
+        workingPath!,
+        areas,
+        pdf?.password,
+        {
+          skipRows: activeTemplate?.skipRows,
+          columns: activeTemplate?.columns,
+          mergeRows: activeTemplate?.mergeRows,
+        },
+        setExtractProgress,
+      );
+    },
     enabled: step === "review" && isTauri() && Boolean(workingPath) && areas.length > 0,
   });
 
@@ -599,24 +667,43 @@ export default function App() {
         step={step}
         canSelect={canSelect}
         canReview={canReview}
-        fileName={pdf?.name}
+        fileName={inBatch ? `${batchJobs.length} statements` : pdf?.name}
         onStep={goStep}
       />
 
+      {batchJobs ? (
+        <div
+          hidden={!inBatch}
+          inert={!inBatch ? true : undefined}
+          className={cn("min-h-0 flex-1 flex-col", inBatch ? "flex" : "hidden")}
+        >
+          <BatchView
+            jobs={batchJobs}
+            templates={templates}
+            headingRef={inBatch ? stepHeadingRef : undefined}
+            onJobsChange={setBatchJobs}
+            onClose={() => setBatchJobs(null)}
+            onOpenEditor={(next) => void openPdf(next)}
+          />
+        </div>
+      ) : null}
+
       <div
-        hidden={step !== "upload" && Boolean(pdf)}
-        inert={step !== "upload" && Boolean(pdf) ? true : undefined}
+        hidden={inBatch || (step !== "upload" && Boolean(pdf))}
+        inert={inBatch || (step !== "upload" && Boolean(pdf)) ? true : undefined}
         className={cn(
           "min-h-0 flex-1 flex-col",
-          step === "upload" || !pdf ? "flex" : "hidden",
+          !inBatch && (step === "upload" || !pdf) ? "flex" : "hidden",
         )}
       >
         <FileOpener
           onOpen={handleOpen}
+          onBatch={startBatch}
+          onBackToBatch={batchJobs ? backToBatch : undefined}
           busy={busy}
           currentFile={pdf ? { name: pdf.name, pageCount: pageCount || undefined } : undefined}
           onKeepFile={() => setStep("select")}
-          headingRef={step === "upload" ? stepHeadingRef : undefined}
+          headingRef={step === "upload" && !inBatch ? stepHeadingRef : undefined}
         />
       </div>
 
@@ -647,6 +734,10 @@ export default function App() {
               setActiveTemplate(null);
               setStatus("");
             }}
+            canRepeat={
+              pageCount > 1 && selections.some((selection) => selection.page === currentPage)
+            }
+            onRepeat={repeatCurrentPage}
             onAutodetect={() => void autodetect()}
             onContinue={() => setStep("review")}
             onChangePdf={() => void changePdf()}
@@ -788,6 +879,7 @@ export default function App() {
           tables={extractQuery.data ?? []}
           fileName={pdf.name}
           loading={extractQuery.isFetching}
+          extractProgress={extractProgress}
           error={extractError}
           canExtract={isTauri()}
           templateName={activeTemplate?.name}

@@ -141,6 +141,86 @@ export function columnSuspects(columns: string[], rows: ReviewRow[]): ColumnSusp
   return suspects;
 }
 
+export type CellKind = "receipt" | "datetime" | "status" | "money" | "narrative";
+
+const STATUS_CELL = /^(completed|failed|success|pending|posted|reversed)$/i;
+const MONEY_CELL = /^-?[\d,]+\.\d{2}$/;
+const DATE_CELL =
+  /(?:\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}|\d{4}[-/.]\d{1,2}[-/.]\d{1,2})/;
+const TIME_CELL = /\d{1,2}:\d{2}(?::\d{2})?/;
+const RECEIPT_CELL = /^[A-Z]{2}[A-Z0-9]{6,10}\b/i;
+
+export function classifyCell(value: string): CellKind | "empty" {
+  const text = value.replace(/\s+/g, " ").trim();
+  if (!text) return "empty";
+  if (STATUS_CELL.test(text)) return "status";
+  if (MONEY_CELL.test(text)) return "money";
+  if (RECEIPT_CELL.test(text)) return "receipt";
+  if (DATE_CELL.test(text) || (TIME_CELL.test(text) && text.length <= 24)) return "datetime";
+  return "narrative";
+}
+
+function expectedKind(header: string): CellKind | null {
+  const name = header.trim().toLowerCase();
+  if (/receipt/.test(name)) return "receipt";
+  if (/\bstatus\b/.test(name)) return "status";
+  if (
+    isMoneyColumn(header) ||
+    /^(withdrawn|paid in|paid out|balance)$/.test(name)
+  ) {
+    return "money";
+  }
+  if (isNarrativeColumn(header)) return "narrative";
+  if (isDateColumn(header) || /completion|\btime\b/.test(name)) return "datetime";
+  return null;
+}
+
+function majorityKind(values: string[]): CellKind | null {
+  const counts: Partial<Record<CellKind, number>> = {};
+  let total = 0;
+  for (const value of values) {
+    const kind = classifyCell(value);
+    if (kind === "empty") continue;
+    counts[kind] = (counts[kind] ?? 0) + 1;
+    total += 1;
+  }
+  if (total < 3) return null;
+  let best: CellKind | null = null;
+  let n = 0;
+  for (const kind of Object.keys(counts) as CellKind[]) {
+    const count = counts[kind] ?? 0;
+    if (count > n) {
+      n = count;
+      best = kind;
+    }
+  }
+  if (!best || n / total < 0.55) return null;
+  return best;
+}
+
+export interface ColumnMismatch {
+  index: number;
+  expected: CellKind;
+  found: CellKind;
+}
+
+/** True when two or more headers describe a different kind of cell than their contents. */
+export function columnShift(columns: string[], rows: ReviewRow[]): {
+  shifted: boolean;
+  mismatches: ColumnMismatch[];
+} {
+  const sample = rows.slice(0, 80);
+  const mismatches: ColumnMismatch[] = [];
+  columns.forEach((name, index) => {
+    const expected = expectedKind(name);
+    if (!expected) return;
+    const found = majorityKind(sample.map((row) => row.cells[index] ?? ""));
+    if (!found || found === expected) return;
+    mismatches.push({ index, expected, found });
+  });
+  return { shifted: mismatches.length >= 2, mismatches };
+}
+
 function findHaystack(value: string): string {
   return value.toLowerCase().replace(/,/g, "");
 }
