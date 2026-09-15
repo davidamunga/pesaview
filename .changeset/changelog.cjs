@@ -21,7 +21,7 @@ function formatReleaseLine({ firstLine, futureLines, pull, thanksUsers, githubSe
 async function getReleaseLine(changeset, _type, options) {
   if (!options?.repo) {
     throw new Error(
-      'Provide a repo: "changelog": [".changeset/changelog.cjs", { "repo": "org/repo" }]',
+      'Provide a repo: "changelog": ["./changelog.cjs", { "repo": "org/repo" }]',
     );
   }
 
