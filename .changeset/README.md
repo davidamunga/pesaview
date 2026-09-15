@@ -2,6 +2,8 @@
 
 This project uses [Changesets](https://github.com/changesets/changesets) for versioning and changelog generation. Packages are not published to npm (`private: true`); a GitHub Release is created by the Main Release workflow instead.
 
+Release notes lead with the user-facing sentence. A PR link is appended when Changesets can resolve one. They do not thank the maintainer or include commit SHAs. To credit someone else, add `author: @username` on its own line in the changeset.
+
 ## Adding a changeset
 
 When a change is user-facing, run:

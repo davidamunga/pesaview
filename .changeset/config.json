@@ -1,11 +1,8 @@
 {
   "$schema": "https://unpkg.com/@changesets/config@3.0.0/schema.json",
   "changelog": [
-    "@changesets/changelog-github",
-    {
-      "repo": "davidamunga/pesaview",
-      "template": "\n\n- {summary} {ref}"
-    }
+    ".changeset/changelog.cjs",
+    { "repo": "davidamunga/pesaview" }
   ],
   "commit": false,
   "fixed": [],
