@@ -1,5 +1,15 @@
 # pesaview
 
+## 0.4.0
+
+### Minor Changes
+
+- Use Inter for the app chrome so labels, buttons, and headings match the site. The statement grid still uses Source Serif. ([#13](https://github.com/davidamunga/pesaview/pull/13))
+
+### Patch Changes
+
+- Show the version next to PesaView. Feedback is in the chrome; the Upload screen names David Amunga. ([#14](https://github.com/davidamunga/pesaview/pull/14))
+
 ## 0.3.0
 
 ### Minor Changes
